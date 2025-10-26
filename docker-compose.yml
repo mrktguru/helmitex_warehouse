@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-warehouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-warehouse}
+      POSTGRES_DB: ${POSTGRES_DB:-warehouse}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  bot:
+    build: .
+    depends_on:
+      - db
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  pgdata:
