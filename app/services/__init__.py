@@ -1,10 +1,17 @@
 """
-Бизнес-логика приложения.
+Сервисы бизнес-логики.
 """
 
-# Временно импортируем из _original_services
-# После разделения на модули это будет обновлено
+from . import category_service
+from . import raw_material_service
+from . import semi_product_service
+from . import finished_product_service
+from . import recipe_service
 
-from . import _original_services
-
-__all__ = ["_original_services"]
+__all__ = [
+    "category_service",
+    "raw_material_service",
+    "semi_product_service",
+    "finished_product_service",
+    "recipe_service",
+]
