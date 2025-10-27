@@ -1,10 +1,10 @@
 """
 Главный модуль Telegram бота.
 """
-from helmitex_warehouse.database.db import init_db
-from helmitex_warehouse.handlers._original_handlers import build_application
-from helmitex_warehouse.logger import setup_logging, get_logger
-from helmitex_warehouse.config import LOG_LEVEL, LOG_FILE, APP_NAME, APP_VERSION
+from app.database.db import init_db
+from app.handlers._original_handlers import build_application
+from app.logger import setup_logging, get_logger
+from app.config import LOG_LEVEL, LOG_FILE, APP_NAME, APP_VERSION
 
 # Настраиваем логирование
 setup_logging(log_level=LOG_LEVEL, log_file=LOG_FILE)

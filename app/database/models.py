@@ -6,7 +6,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Floa
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 import enum
 
-from helmitex_warehouse.database.db import Base
+from app.database.db import Base
 
 
 class SKUType(str, enum.Enum):

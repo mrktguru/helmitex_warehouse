@@ -5,7 +5,7 @@
 import sys
 import logging
 
-from helmitex_warehouse.bot import main
+from app.bot import main
 
 if __name__ == "__main__":
     try:

@@ -7,14 +7,14 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from contextlib import contextmanager
 from typing import Generator
 
-from helmitex_warehouse.config import (
+from app.config import (
     DATABASE_URL,
     DB_POOL_SIZE,
     DB_MAX_OVERFLOW,
     DB_POOL_TIMEOUT,
     DB_ECHO
 )
-from helmitex_warehouse.logger import get_logger
+from app.logger import get_logger
 
 logger = get_logger("database")
 
@@ -47,7 +47,7 @@ def init_db():
     """
     try:
         logger.info("Инициализация базы данных...")
-        from helmitex_warehouse.database.models import (
+        from app.database.models import (
             SKU, Category, Recipe, RecipeComponent, 
             Barrel, Production, SemiBatch, ProductionUsedRaw
         )
