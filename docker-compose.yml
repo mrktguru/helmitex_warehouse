@@ -1,23 +1,56 @@
-version: "3.9"
+version: '3.8'
+
 services:
+  # PostgreSQL Database
   db:
-    image: postgres:15
+    image: postgres:15-alpine
+    container_name: helmitex_db
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-warehouse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-warehouse}
-      POSTGRES_DB: ${POSTGRES_DB:-warehouse}
+      POSTGRES_USER: warehouse
+      POSTGRES_PASSWORD: warehouse
+      POSTGRES_DB: warehouse
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warehouse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - warehouse_network
 
+  # Telegram Bot Application
   bot:
     build: .
-    depends_on:
-      - db
-    env_file:
-      - .env
+    container_name: helmitex_bot
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - OWNER_TELEGRAM_ID=${OWNER_TELEGRAM_ID}
+      - DATABASE_URL=postgresql+psycopg2://warehouse:warehouse@db:5432/warehouse
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=logs/warehouse.log
+      - DEBUG=${DEBUG:-False}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-5}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-10}
+      - DB_ECHO=${DB_ECHO:-False}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - warehouse_network
 
 volumes:
-  pgdata:
+  postgres_data:
+    driver: local
+
+networks:
+  warehouse_network:
+    driver: bridge
