@@ -3,6 +3,7 @@ python-telegram-bot==21.5
 SQLAlchemy==2.0.34
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1
+alembic==1.13.1
 
 # Database migrations
 alembic==1.13.1
