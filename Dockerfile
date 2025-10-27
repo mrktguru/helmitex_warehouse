@@ -18,41 +18,6 @@ COPY . .
 # Создание директорий для логов и данных
 RUN mkdir -p /app/logs /app/data
 
-# Создание скрипта запуска с миграциями
-RUN echo '#!/bin/bash\n\
-set -e\n\
-\n\
-echo "================================="\n\
-echo "Waiting for database..."\n\
-echo "================================="\n\
-\n\
-# Ожидание готовности PostgreSQL\n\
-until pg_isready -h db -U warehouse -d warehouse; do\n\
-  echo "Database is unavailable - sleeping"\n\
-  sleep 2\n\
-done\n\
-\n\
-echo "================================="\n\
-echo "Database is ready!"\n\
-echo "================================="\n\
-\n\
-echo "Running Alembic migrations..."\n\
-alembic upgrade head\n\
-\n\
-if [ $? -eq 0 ]; then\n\
-  echo "================================="\n\
-  echo "Migrations completed successfully!"\n\
-  echo "================================="\n\
-else\n\
-  echo "================================="\n\
-  echo "Migration failed!"\n\
-  echo "================================="\n\
-  exit 1\n\
-fi\n\
-\n\
-echo "Starting Telegram bot..."\n\
-python bot.py' > /app/start.sh
-
 # Делаем скрипт исполняемым
 RUN chmod +x /app/start.sh
 
