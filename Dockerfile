@@ -1,18 +1,30 @@
-# syntax=docker/dockerfile:1
+# Используем официальный Python образ
 FROM python:3.11-slim
 
+# Устанавливаем рабочую директорию
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+# Устанавливаем системные зависимости
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
+# Копируем файл зависимостей
+COPY requirements.txt .
+
+# Устанавливаем Python зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app /app/app
+# Копируем весь проект
+COPY . .
 
-CMD ["python", "-m", "app.bot"]
+# Создаем директории для логов и данных
+RUN mkdir -p logs data
+
+# Устанавливаем переменные окружения
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Команда запуска бота
+CMD ["python", "-m", "app"]
