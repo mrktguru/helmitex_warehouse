@@ -1,43 +1,40 @@
 """
 Главный модуль Telegram бота.
 """
-from app.database.db import init_db
-from app.handlers._original_handlers import build_application
-from app.logger import setup_logging, get_logger
-from app.config import LOG_LEVEL, LOG_FILE, APP_NAME, APP_VERSION
+import logging
+from telegram.ext import Application, CommandHandler
 
-# Настраиваем логирование
-setup_logging(log_level=LOG_LEVEL, log_file=LOG_FILE)
-logger = get_logger("bot")
+from app.database.db import init_db
+from app.config import TELEGRAM_TOKEN
+from app.handlers.start_handler import start, help_command, status
+
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
-    """Основная функция запуска бота."""
-    logger.info("=" * 80)
-    logger.info(f"Запуск {APP_NAME} v{APP_VERSION}")
-    logger.info("=" * 80)
-    
-    try:
-        # Инициализация базы данных
-        logger.info("Инициализация базы данных...")
-        init_db()
-        logger.info("✅ База данных инициализирована успешно")
-        
-        # Создание и запуск приложения
-        logger.info("Создание Telegram приложения...")
-        app = build_application()
-        logger.info("✅ Telegram приложение создано успешно")
-        
-        # Запуск polling
-        logger.info("🚀 Запуск polling...")
-        logger.info("Бот готов к работе!")
-        app.run_polling()
-        
-    except KeyboardInterrupt:
-        logger.info("⏹️  Бот остановлен пользователем")
-    except Exception as e:
-        logger.critical(f"❌ Критическая ошибка при запуске бота: {e}", exc_info=True)
-        raise
+    """Запуск бота"""
+    # Инициализация базы данных
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database initialized successfully!")
+
+    # Создание приложения
+    logger.info("Starting bot...")
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status))
+
+    # Запуск бота
+    logger.info("Bot started successfully!")
+    application.run_polling(allowed_updates=["message", "callback_query"])
 
 
 if __name__ == "__main__":
