@@ -30,5 +30,6 @@ else
 fi
 
 echo "Starting Telegram bot..."
-# Запускаем бота из папки app
-cd /app/app && python bot.py
+# Устанавливаем PYTHONPATH чтобы Python мог найти модуль app
+export PYTHONPATH=/app:$PYTHONPATH
+cd /app && python -m app.bot
