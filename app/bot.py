@@ -1,9 +1,17 @@
 """
-Главный модуль Telegram бота.
+Главный модуль Telegram бота с инлайн-кнопками.
 """
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters
+)
 
 from app.database.db import init_db, get_db
 from app.config import TELEGRAM_BOT_TOKEN
@@ -15,6 +23,89 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Состояния для ConversationHandler
+MAIN_MENU = 0
+ARRIVAL_MENU = 1
+PRODUCTION_MENU = 2
+SHIPMENT_MENU = 3
+SETTINGS_MENU = 4
+
+
+# ============= КЛАВИАТУРЫ =============
+
+def get_main_keyboard():
+    """Главное меню с инлайн-кнопками"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📥 Приход сырья", callback_data="arrival"),
+            InlineKeyboardButton("🏭 Выпуск продукции", callback_data="production")
+        ],
+        [
+            InlineKeyboardButton("📤 Отгрузка", callback_data="shipment"),
+            InlineKeyboardButton("⚙️ Настройки", callback_data="settings")
+        ],
+        [
+            InlineKeyboardButton("📊 Остатки", callback_data="stock"),
+            InlineKeyboardButton("📋 История", callback_data="history")
+        ],
+        [
+            InlineKeyboardButton("ℹ️ Справка", callback_data="help")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_arrival_keyboard():
+    """Меню прихода сырья"""
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить приход", callback_data="arrival_add")],
+        [InlineKeyboardButton("📋 История прихода", callback_data="arrival_history")],
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_production_keyboard():
+    """Меню выпуска продукции"""
+    keyboard = [
+        [InlineKeyboardButton("➕ Новое производство", callback_data="production_new")],
+        [InlineKeyboardButton("📋 История производства", callback_data="production_history")],
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_shipment_keyboard():
+    """Меню отгрузки"""
+    keyboard = [
+        [InlineKeyboardButton("➕ Новая отгрузка", callback_data="shipment_new")],
+        [InlineKeyboardButton("📋 История отгрузок", callback_data="shipment_history")],
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_settings_keyboard():
+    """Меню настроек"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🏢 Склады", callback_data="settings_warehouses"),
+            InlineKeyboardButton("📦 Товары", callback_data="settings_skus")
+        ],
+        [
+            InlineKeyboardButton("👥 Пользователи", callback_data="settings_users"),
+            InlineKeyboardButton("📊 Статистика", callback_data="settings_stats")
+        ],
+        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_back_keyboard():
+    """Кнопка назад"""
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
+    return InlineKeyboardMarkup(keyboard)
 
 
 # ============= HANDLERS =============
@@ -34,227 +125,227 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_admin = db_user.is_admin
     
     welcome_text = (
-        f"🏭 Добро пожаловать в Helmitex Warehouse, {user.first_name}!\n\n"
-        "Система складского учета готова к работе.\n\n"
-        "📋 Основные команды:\n"
-        "/warehouses - Управление складами\n"
-        "/skus - Управление товарами\n"
-        "/stock - Просмотр остатков\n"
-        "/movements - История движений\n"
-        "/orders - Управление заказами\n"
-        "/help - Справка\n"
-        "/status - Статус системы\n"
+        f"🏭 *Helmitex Warehouse*\n\n"
+        f"Добро пожаловать, {user.first_name}!\n\n"
+        "Выберите действие:"
     )
     
     if is_admin:
-        welcome_text += "\n👑 У вас есть права администратора"
+        welcome_text += "\n\n👑 _У вас есть права администратора_"
     
-    await update.message.reply_text(welcome_text)
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /help"""
-    help_text = (
-        "📚 Справка по командам Helmitex Warehouse:\n\n"
-        "🏢 Склады:\n"
-        "/warehouses - Список складов\n"
-        "/add_warehouse - Добавить склад\n\n"
-        "📦 Товары:\n"
-        "/skus - Список товаров\n"
-        "/add_sku - Добавить товар\n\n"
-        "📊 Остатки:\n"
-        "/stock - Остатки на складах\n"
-        "/low_stock - Товары с низким остатком\n\n"
-        "🔄 Движения:\n"
-        "/movements - История движений\n"
-        "/add_in - Оприходовать товар\n"
-        "/add_out - Списать товар\n"
-        "/transfer - Переместить товар\n\n"
-        "📋 Заказы:\n"
-        "/orders - Список заказов\n"
-        "/new_order - Создать заказ\n\n"
-        "ℹ️ Прочее:\n"
-        "/help - Эта справка\n"
-        "/status - Статус системы\n"
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
     )
-    await update.message.reply_text(help_text)
 
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /status"""
-    with get_db() as db:
-        from app.services import warehouse_service, sku_service
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на инлайн-кнопки"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    # Главное меню
+    if data == "main_menu":
+        await query.edit_message_text(
+            "🏭 *Helmitex Warehouse*\n\nВыберите действие:",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    # Приход сырья
+    elif data == "arrival":
+        await query.edit_message_text(
+            "📥 *Приход сырья*\n\nВыберите действие:",
+            reply_markup=get_arrival_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "arrival_add":
+        await query.edit_message_text(
+            "➕ *Добавить приход сырья*\n\n"
+            "Функция в разработке.\n"
+            "Скоро здесь можно будет оформить приход сырья.",
+            reply_markup=get_arrival_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "arrival_history":
+        await query.edit_message_text(
+            "📋 *История прихода сырья*\n\n"
+            "Последние операции прихода будут отображаться здесь.",
+            reply_markup=get_arrival_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    # Выпуск продукции
+    elif data == "production":
+        await query.edit_message_text(
+            "🏭 *Выпуск продукции*\n\nВыберите действие:",
+            reply_markup=get_production_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "production_new":
+        await query.edit_message_text(
+            "➕ *Новое производство*\n\n"
+            "Функция в разработке.\n"
+            "Скоро здесь можно будет оформить выпуск продукции.",
+            reply_markup=get_production_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "production_history":
+        await query.edit_message_text(
+            "📋 *История производства*\n\n"
+            "Последние операции производства будут отображаться здесь.",
+            reply_markup=get_production_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    # Отгрузка
+    elif data == "shipment":
+        await query.edit_message_text(
+            "📤 *Отгрузка*\n\nВыберите действие:",
+            reply_markup=get_shipment_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "shipment_new":
+        await query.edit_message_text(
+            "➕ *Новая отгрузка*\n\n"
+            "Функция в разработке.\n"
+            "Скоро здесь можно будет оформить отгрузку.",
+            reply_markup=get_shipment_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "shipment_history":
+        await query.edit_message_text(
+            "📋 *История отгрузок*\n\n"
+            "Последние отгрузки будут отображаться здесь.",
+            reply_markup=get_shipment_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    # Настройки
+    elif data == "settings":
+        await query.edit_message_text(
+            "⚙️ *Настройки*\n\nВыберите раздел:",
+            reply_markup=get_settings_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "settings_warehouses":
+        with get_db() as db:
+            from app.services import warehouse_service
+            try:
+                whs = warehouse_service.get_all_warehouses(db)
+                if whs:
+                    text = "🏢 *Склады:*\n\n"
+                    for wh in whs:
+                        text += f"• {wh.name}"
+                        if wh.location:
+                            text += f" ({wh.location})"
+                        text += "\n"
+                else:
+                    text = "🏢 *Склады*\n\nСкладов пока нет."
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                text = "❌ Ошибка при загрузке складов"
         
-        try:
-            warehouses_count = len(warehouse_service.get_all_warehouses(db))
-            skus_count = len(sku_service.get_all_skus(db))
-        except Exception as e:
-            logger.error(f"Error getting stats: {e}")
-            warehouses_count = 0
-            skus_count = 0
+        await query.edit_message_text(
+            text,
+            reply_markup=get_settings_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    status_text = (
-        "✅ Система работает нормально\n\n"
-        f"🏢 Складов: {warehouses_count}\n"
-        f"📦 Товаров: {skus_count}\n"
-        "📊 База данных: подключена\n"
-        "🤖 Бот: активен"
-    )
-    await update.message.reply_text(status_text)
-
-
-async def warehouses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список складов"""
-    with get_db() as db:
-        from app.services import warehouse_service
+    elif data == "settings_skus":
+        with get_db() as db:
+            from app.services import sku_service
+            try:
+                skus = sku_service.get_all_skus(db)
+                if skus:
+                    text = "📦 *Товары:*\n\n"
+                    for sku in skus[:10]:
+                        text += f"• {sku.code} - {sku.name}\n"
+                    if len(skus) > 10:
+                        text += f"\n_...и еще {len(skus) - 10} товаров_"
+                else:
+                    text = "📦 *Товары*\n\nТоваров пока нет."
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                text = "❌ Ошибка при загрузке товаров"
         
-        try:
-            whs = warehouse_service.get_all_warehouses(db)
-        except Exception as e:
-            logger.error(f"Error getting warehouses: {e}")
-            await update.message.reply_text("❌ Ошибка при получении списка складов")
-            return
+        await query.edit_message_text(
+            text,
+            reply_markup=get_settings_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    if not whs:
-        await update.message.reply_text("📦 Складов пока нет\n\nИспользуйте /add_warehouse для добавления")
-        return
+    elif data == "settings_users":
+        await query.edit_message_text(
+            "👥 *Пользователи*\n\nУправление пользователями в разработке.",
+            reply_markup=get_settings_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    text = "🏢 Список складов:\n\n"
-    for wh in whs:
-        text += f"• {wh.name}"
-        if wh.location:
-            text += f" ({wh.location})"
-        text += f" [ID: {wh.id}]\n"
-    
-    await update.message.reply_text(text)
-
-
-async def skus_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список товаров"""
-    with get_db() as db:
-        from app.services import sku_service
+    elif data == "settings_stats":
+        with get_db() as db:
+            from app.services import warehouse_service, sku_service
+            try:
+                wh_count = len(warehouse_service.get_all_warehouses(db))
+                sku_count = len(sku_service.get_all_skus(db))
+                text = (
+                    "📊 *Статистика системы*\n\n"
+                    f"🏢 Складов: {wh_count}\n"
+                    f"📦 Товаров: {sku_count}\n"
+                    f"✅ Статус: Работает"
+                )
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                text = "❌ Ошибка при загрузке статистики"
         
-        try:
-            skus = sku_service.get_all_skus(db)
-        except Exception as e:
-            logger.error(f"Error getting SKUs: {e}")
-            await update.message.reply_text("❌ Ошибка при получении списка товаров")
-            return
+        await query.edit_message_text(
+            text,
+            reply_markup=get_settings_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    if not skus:
-        await update.message.reply_text("📦 Товаров пока нет\n\nИспользуйте /add_sku для добавления")
-        return
+    # Остатки
+    elif data == "stock":
+        await query.edit_message_text(
+            "📊 *Остатки на складах*\n\nФункция в разработке.",
+            reply_markup=get_back_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    text = "📦 Список товаров:\n\n"
-    for sku in skus[:20]:  # Показываем первые 20
-        text += f"• {sku.code} - {sku.name}\n"
-        text += f"  Тип: {sku.type.value}, Ед.изм: {sku.unit}\n"
+    # История
+    elif data == "history":
+        await query.edit_message_text(
+            "📋 *История операций*\n\nФункция в разработке.",
+            reply_markup=get_back_keyboard(),
+            parse_mode='Markdown'
+        )
     
-    if len(skus) > 20:
-        text += f"\n... и еще {len(skus) - 20} товаров"
-    
-    await update.message.reply_text(text)
-
-
-async def stock_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Остатки на складах"""
-    with get_db() as db:
-        from app.services import stock_service, warehouse_service
-        
-        try:
-            warehouses_list = warehouse_service.get_all_warehouses(db)
-            
-            if not warehouses_list:
-                await update.message.reply_text("📦 Нет складов для отображения остатков")
-                return
-            
-            text = "📊 Остатки на складах:\n\n"
-            
-            for wh in warehouses_list:
-                stocks = stock_service.get_warehouse_stock(db, wh.id)
-                text += f"🏢 {wh.name}:\n"
-                
-                if not stocks:
-                    text += "  Нет остатков\n\n"
-                    continue
-                
-                for stock in stocks[:10]:  # Первые 10 позиций
-                    text += f"  • {stock.sku.code}: {stock.quantity} {stock.sku.unit}\n"
-                
-                if len(stocks) > 10:
-                    text += f"  ... и еще {len(stocks) - 10} позиций\n"
-                text += "\n"
-            
-            await update.message.reply_text(text)
-            
-        except Exception as e:
-            logger.error(f"Error getting stock: {e}")
-            await update.message.reply_text("❌ Ошибка при получении остатков")
-
-
-async def movements_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """История движений"""
-    with get_db() as db:
-        from app.services import movement_service
-        
-        try:
-            user = update.effective_user
-            db_user = user_service.get_or_create_user(
-                db=db,
-                telegram_id=user.id,
-                username=user.username,
-                full_name=user.full_name
-            )
-            
-            movements = movement_service.get_user_movements(db, db_user.id, limit=10)
-            
-            if not movements:
-                await update.message.reply_text("🔄 История движений пуста")
-                return
-            
-            text = "🔄 Последние движения:\n\n"
-            
-            for mov in movements:
-                text += f"• {mov.type.value.upper()}: {mov.sku.code}\n"
-                text += f"  Количество: {mov.quantity} {mov.sku.unit}\n"
-                text += f"  Склад: {mov.warehouse.name}\n"
-                if mov.notes:
-                    text += f"  Примечание: {mov.notes}\n"
-                text += f"  Дата: {mov.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-            
-            await update.message.reply_text(text)
-            
-        except Exception as e:
-            logger.error(f"Error getting movements: {e}")
-            await update.message.reply_text("❌ Ошибка при получении истории движений")
-
-
-async def orders_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список заказов"""
-    with get_db() as db:
-        from app.services import order_service
-        
-        try:
-            orders = order_service.get_orders(db, limit=10)
-            
-            if not orders:
-                await update.message.reply_text("📋 Заказов пока нет")
-                return
-            
-            text = "📋 Последние заказы:\n\n"
-            
-            for order in orders:
-                text += f"• {order.order_number}\n"
-                text += f"  Тип: {order.type.value}\n"
-                text += f"  Статус: {order.status.value}\n"
-                text += f"  Склад: {order.warehouse.name}\n"
-                text += f"  Дата: {order.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-            
-            await update.message.reply_text(text)
-            
-        except Exception as e:
-            logger.error(f"Error getting orders: {e}")
-            await update.message.reply_text("❌ Ошибка при получении списка заказов")
+    # Справка
+    elif data == "help":
+        help_text = (
+            "ℹ️ *Справка по системе*\n\n"
+            "*Основные разделы:*\n\n"
+            "📥 *Приход сырья* - регистрация поступления материалов\n"
+            "🏭 *Выпуск продукции* - учет производства\n"
+            "📤 *Отгрузка* - отгрузка готовой продукции\n"
+            "⚙️ *Настройки* - управление системой\n\n"
+            "Для начала работы выберите нужный раздел в главном меню."
+        )
+        await query.edit_message_text(
+            help_text,
+            reply_markup=get_back_keyboard(),
+            parse_mode='Markdown'
+        )
 
 
 # ============= MAIN =============
@@ -277,13 +368,7 @@ def main():
 
         # Регистрация обработчиков
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("status", status))
-        application.add_handler(CommandHandler("warehouses", warehouses))
-        application.add_handler(CommandHandler("skus", skus_list))
-        application.add_handler(CommandHandler("stock", stock_list))
-        application.add_handler(CommandHandler("movements", movements_list))
-        application.add_handler(CommandHandler("orders", orders_list))
+        application.add_handler(CallbackQueryHandler(button_handler))
 
         logger.info("✅ Обработчики зарегистрированы")
 
