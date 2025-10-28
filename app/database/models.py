@@ -11,31 +11,49 @@ from .db import Base
 
 class SKUType(str, enum.Enum):
     """Тип SKU"""
-    raw = "raw"
-    finished = "finished"
+    raw = "raw"  # Сырье
+    finished = "finished"  # Готовая продукция
+
+
+class CategoryType(str, enum.Enum):
+    """Категории сырья"""
+    thickeners = "Загустители"  # Загустители
+    colorants = "Красители"  # Красители
+    fragrances = "Отдушки"  # Отдушки
+    bases = "Основы"  # Основы
+    additives = "Добавки"  # Добавки
+    packaging = "Упаковка"  # Упаковка
+
+
+class UnitType(str, enum.Enum):
+    """Единицы измерения"""
+    liters = "л"  # Литры
+    kg = "кг"  # Килограммы
+    grams = "г"  # Граммы
+    pieces = "шт"  # Штуки
 
 
 class MovementType(str, enum.Enum):
     """Тип движения товара"""
-    in_ = "in"
-    out = "out"
-    transfer = "transfer"
-    adjustment = "adjustment"
+    in_ = "in"  # Приход
+    out = "out"  # Расход
+    transfer = "transfer"  # Перемещение
+    adjustment = "adjustment"  # Корректировка
 
 
 class OrderType(str, enum.Enum):
     """Тип заказа"""
-    purchase = "purchase"
-    production = "production"
-    sale = "sale"
+    purchase = "purchase"  # Закупка
+    production = "production"  # Производство
+    sale = "sale"  # Продажа
 
 
 class OrderStatus(str, enum.Enum):
     """Статус заказа"""
-    pending = "pending"
-    in_progress = "in_progress"
-    completed = "completed"
-    cancelled = "cancelled"
+    pending = "pending"  # Ожидает
+    in_progress = "in_progress"  # В работе
+    completed = "completed"  # Завершен
+    cancelled = "cancelled"  # Отменен
 
 
 class User(Base):
@@ -60,10 +78,10 @@ class Warehouse(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     location = Column(String, nullable=True)
+    is_default = Column(Boolean, default=False)  # Склад по умолчанию
     created_at = Column(DateTime, default=datetime.utcnow)
 
     stock = relationship("Stock", back_populates="warehouse")
-    # ИСПРАВЛЕНО: явно указываем foreign_keys
     movements = relationship(
         "Movement",
         back_populates="warehouse",
@@ -80,7 +98,8 @@ class SKU(Base):
     code = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
     type = Column(Enum(SKUType), nullable=False)
-    unit = Column(String, default="шт")
+    category = Column(Enum(CategoryType), nullable=True)  # НОВОЕ: Категория
+    unit = Column(Enum(UnitType), default=UnitType.pieces)  # ОБНОВЛЕНО: Enum вместо String
     min_stock = Column(Float, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -118,7 +137,6 @@ class Movement(Base):
     notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # ИСПРАВЛЕНО: явно указываем foreign_keys для основного склада
     warehouse = relationship(
         "Warehouse",
         back_populates="movements",
