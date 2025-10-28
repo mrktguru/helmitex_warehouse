@@ -1,246 +1,158 @@
 """
 Модели базы данных для складского учета Helmitex Warehouse.
-Переработанная версия с простой логикой учета.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Float, Boolean, Text
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Float, Boolean
+from sqlalchemy.orm import relationship
 import enum
 
-from app.database.db import Base
+from .db import Base
 
 
-# ============================================================================
-# ENUMS (Перечисления)
-# ============================================================================
-
-class CategoryType(str, enum.Enum):
-    """Типы категорий."""
-    raw_material = "raw_material"      # Категория сырья
-    semi_product = "semi_product"      # Категория полуфабрикатов
-    finished_product = "finished_product"  # Категория готовой продукции
-
-
-class UnitType(str, enum.Enum):
-    """Единицы измерения."""
-    kg = "кг"
-    liter = "л"
-    piece = "шт"
-    gram = "г"
-    ml = "мл"
-
-
-class RecipeStatus(str, enum.Enum):
-    """Статусы технологических карт."""
-    draft = "draft"          # Черновик
-    active = "active"        # Активная
-    archived = "archived"    # Архивная
+class SKUType(str, enum.Enum):
+    """Тип SKU"""
+    raw = "raw"  # Сырье
+    finished = "finished"  # Готовая продукция
 
 
 class MovementType(str, enum.Enum):
-    """Типы движений склада."""
-    arrival = "arrival"              # Приход сырья
-    production = "production"        # Производство (списание сырья)
-    production_output = "production_output"  # Производство (выход полуфабриката)
-    packing = "packing"              # Фасовка (списание полуфабриката)
-    packing_output = "packing_output"  # Фасовка (выход готовой продукции)
-    shipment = "shipment"            # Отгрузка
-    adjustment = "adjustment"        # Корректировка остатков
+    """Тип движения товара"""
+    in_ = "in"  # Приход
+    out = "out"  # Расход
+    transfer = "transfer"  # Перемещение
+    adjustment = "adjustment"  # Корректировка
 
 
-# ============================================================================
-# СПРАВОЧНИКИ
-# ============================================================================
-
-class Category(Base):
-    """Категории (универсальные для сырья, полуфабрикатов, продукции)."""
-    __tablename__ = "categories"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    type: Mapped[CategoryType] = mapped_column(Enum(CategoryType), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)  # Telegram ID
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    raw_materials = relationship("RawMaterial", back_populates="category")
-    semi_products = relationship("SemiProduct", back_populates="category")
-    finished_products = relationship("FinishedProduct", back_populates="category")
+class OrderType(str, enum.Enum):
+    """Тип заказа"""
+    purchase = "purchase"  # Закупка
+    production = "production"  # Производство
+    sale = "sale"  # Продажа
 
 
-class RawMaterial(Base):
-    """Сырье."""
-    __tablename__ = "raw_materials"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    category_id: Mapped[int] = mapped_column(Integer, ForeignKey("categories.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    unit: Mapped[UnitType] = mapped_column(Enum(UnitType), nullable=False)
-    stock_quantity: Mapped[float] = mapped_column(Float, default=0.0)  # Текущий остаток
-    min_stock: Mapped[float] = mapped_column(Float, nullable=True)  # Минимальный остаток (для уведомлений)
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    category = relationship("Category", back_populates="raw_materials")
-    recipe_components = relationship("RecipeComponent", back_populates="raw_material")
-    movements = relationship("StockMovement", 
-                           foreign_keys="[StockMovement.raw_material_id]",
-                           back_populates="raw_material")
+class OrderStatus(str, enum.Enum):
+    """Статус заказа"""
+    pending = "pending"  # Ожидает
+    in_progress = "in_progress"  # В работе
+    completed = "completed"  # Завершен
+    cancelled = "cancelled"  # Отменен
 
 
-class SemiProduct(Base):
-    """Полуфабрикаты."""
-    __tablename__ = "semi_products"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    category_id: Mapped[int] = mapped_column(Integer, ForeignKey("categories.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    unit: Mapped[UnitType] = mapped_column(Enum(UnitType), nullable=False)
-    stock_quantity: Mapped[float] = mapped_column(Float, default=0.0)
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    category = relationship("Category", back_populates="semi_products")
-    recipes = relationship("Recipe", back_populates="semi_product")
-    movements = relationship("StockMovement",
-                           foreign_keys="[StockMovement.semi_product_id]",
-                           back_populates="semi_product")
+class User(Base):
+    """Пользователь системы"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(Integer, unique=True, nullable=False)
+    username = Column(String, nullable=True)
+    full_name = Column(String, nullable=True)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Связи
+    movements = relationship("Movement", back_populates="user")
+    orders = relationship("Order", back_populates="user")
 
 
-class FinishedProduct(Base):
-    """Готовая продукция."""
-    __tablename__ = "finished_products"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    category_id: Mapped[int] = mapped_column(Integer, ForeignKey("categories.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    package_type: Mapped[str] = mapped_column(String(100), nullable=False)  # Тип тары (пакет, банка и т.д.)
-    package_weight: Mapped[float] = mapped_column(Float, nullable=False)  # Вес упаковки
-    unit: Mapped[UnitType] = mapped_column(Enum(UnitType), default=UnitType.piece)  # Обычно "шт"
-    stock_quantity: Mapped[float] = mapped_column(Float, default=0.0)  # Количество упаковок
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    category = relationship("Category", back_populates="finished_products")
-    movements = relationship("StockMovement",
-                           foreign_keys="[StockMovement.finished_product_id]",
-                           back_populates="finished_product")
+class Warehouse(Base):
+    """Склад"""
+    __tablename__ = "warehouses"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    location = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Связи
+    stock = relationship("Stock", back_populates="warehouse")
+    movements = relationship("Movement", back_populates="warehouse")
+    orders = relationship("Order", back_populates="warehouse")
 
 
-# ============================================================================
-# ТЕХНОЛОГИЧЕСКИЕ КАРТЫ
-# ============================================================================
+class SKU(Base):
+    """Товарная позиция (Stock Keeping Unit)"""
+    __tablename__ = "skus"
 
-class Recipe(Base):
-    """Технологическая карта (рецепт производства полуфабриката)."""
-    __tablename__ = "recipes"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    semi_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("semi_products.id"), nullable=False)
-    yield_percent: Mapped[float] = mapped_column(Float, nullable=False)  # Процент выхода (50-100%)
-    status: Mapped[RecipeStatus] = mapped_column(Enum(RecipeStatus), default=RecipeStatus.draft)
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    semi_product = relationship("SemiProduct", back_populates="recipes")
-    components = relationship("RecipeComponent", back_populates="recipe", cascade="all, delete-orphan")
-    productions = relationship("Production", back_populates="recipe")
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    type = Column(Enum(SKUType), nullable=False)
+    unit = Column(String, default="шт")
+    min_stock = Column(Float, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Связи
+    stock = relationship("Stock", back_populates="sku")
+    movements = relationship("Movement", back_populates="sku")
+    order_items = relationship("OrderItem", back_populates="sku")
 
 
-class RecipeComponent(Base):
-    """Компоненты технологической карты."""
-    __tablename__ = "recipe_components"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    recipe_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipes.id"), nullable=False)
-    raw_material_id: Mapped[int] = mapped_column(Integer, ForeignKey("raw_materials.id"), nullable=False)
-    percentage: Mapped[float] = mapped_column(Float, nullable=False)  # Процент в рецепте
-    
-    # Relationships
-    recipe = relationship("Recipe", back_populates="components")
-    raw_material = relationship("RawMaterial", back_populates="recipe_components")
+class Stock(Base):
+    """Остатки на складе"""
+    __tablename__ = "stock"
+
+    id = Column(Integer, primary_key=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
+    sku_id = Column(Integer, ForeignKey("skus.id"), nullable=False)
+    quantity = Column(Float, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    warehouse = relationship("Warehouse", back_populates="stock")
+    sku = relationship("SKU", back_populates="stock")
 
 
-# ============================================================================
-# ОПЕРАЦИИ
-# ============================================================================
+class Movement(Base):
+    """Движение товара"""
+    __tablename__ = "movements"
 
-class Production(Base):
-    """Производство (замес) полуфабриката."""
-    __tablename__ = "productions"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    recipe_id: Mapped[int] = mapped_column(Integer, ForeignKey("recipes.id"), nullable=False)
-    target_weight: Mapped[float] = mapped_column(Float, nullable=False)  # Целевой вес полуфабриката
-    actual_weight: Mapped[float] = mapped_column(Float, nullable=True)  # Фактический вес
-    operator_id: Mapped[int] = mapped_column(Integer, nullable=False)  # Telegram ID оператора
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
-    
-    # Relationships
-    recipe = relationship("Recipe", back_populates="productions")
+    id = Column(Integer, primary_key=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
+    sku_id = Column(Integer, ForeignKey("skus.id"), nullable=False)
+    type = Column(Enum(MovementType), nullable=False)
+    quantity = Column(Float, nullable=False)
+    from_warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True)
+    to_warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    notes = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-
-class Packing(Base):
-    """Фасовка полуфабриката в готовую продукцию."""
-    __tablename__ = "packings"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    semi_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("semi_products.id"), nullable=False)
-    finished_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("finished_products.id"), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)  # Количество упаковок
-    weight_used: Mapped[float] = mapped_column(Float, nullable=False)  # Использовано полуфабриката (кг/л)
-    operator_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    # Связи
+    warehouse = relationship("Warehouse", back_populates="movements", foreign_keys=[warehouse_id])
+    sku = relationship("SKU", back_populates="movements")
+    user = relationship("User", back_populates="movements")
 
 
-class Shipment(Base):
-    """Отгрузка готовой продукции."""
-    __tablename__ = "shipments"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    finished_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("finished_products.id"), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    destination: Mapped[str] = mapped_column(String(200), nullable=True)  # Маркетплейс/покупатель
-    operator_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
+class Order(Base):
+    """Заказ"""
+    __tablename__ = "orders"
+
+    id = Column(Integer, primary_key=True)
+    order_number = Column(String, unique=True, nullable=False)
+    type = Column(Enum(OrderType), nullable=False)
+    status = Column(Enum(OrderStatus), default=OrderStatus.pending)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    notes = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Связи
+    warehouse = relationship("Warehouse", back_populates="orders")
+    user = relationship("User", back_populates="orders")
+    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
 
 
-class StockMovement(Base):
-    """Движения склада (универсальная таблица для всех операций)."""
-    __tablename__ = "stock_movements"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    movement_type: Mapped[MovementType] = mapped_column(Enum(MovementType), nullable=False)
-    
-    # Ссылки на материалы (заполняется в зависимости от типа операции)
-    raw_material_id: Mapped[int] = mapped_column(Integer, ForeignKey("raw_materials.id"), nullable=True)
-    semi_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("semi_products.id"), nullable=True)
-    finished_product_id: Mapped[int] = mapped_column(Integer, ForeignKey("finished_products.id"), nullable=True)
-    
-    quantity: Mapped[float] = mapped_column(Float, nullable=False)  # Количество (+ приход, - расход)
-    
-    # Ссылки на операции
-    production_id: Mapped[int] = mapped_column(Integer, ForeignKey("productions.id"), nullable=True)
-    packing_id: Mapped[int] = mapped_column(Integer, ForeignKey("packings.id"), nullable=True)
-    shipment_id: Mapped[int] = mapped_column(Integer, ForeignKey("shipments.id"), nullable=True)
-    
-    operator_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
-    
-    # Relationships
-    raw_material = relationship("RawMaterial", back_populates="movements")
-    semi_product = relationship("SemiProduct", back_populates="movements")
-    finished_product = relationship("FinishedProduct", back_populates="movements")
+class OrderItem(Base):
+    """Позиция заказа"""
+    __tablename__ = "order_items"
+
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    sku_id = Column(Integer, ForeignKey("skus.id"), nullable=False)
+    quantity = Column(Float, nullable=False)
+    price = Column(Float, nullable=True)
+
+    # Связи
+    order = relationship("Order", back_populates="items")
+    sku = relationship("SKU", back_populates="order_items")
