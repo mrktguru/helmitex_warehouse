@@ -6,32 +6,67 @@ from sqlalchemy import pool
 from alembic import context
 
 # Добавляем корневую директорию в путь
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Хак для импорта с относительными путями
-import importlib.util
-import pathlib
+# Динамическая загрузка модулей с обработкой относительных импортов
+def load_module_with_relative_imports(module_name, file_path):
+    """Загружает модуль Python с поддержкой относительных импортов"""
+    import importlib.util
+    
+    # Создаем временный пакет для относительных импортов
+    if '__init__' not in sys.modules:
+        import types
+        init_module = types.ModuleType('__init__')
+        sys.modules['__init__'] = init_module
+    
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    
+    # Добавляем модуль в sys.modules ДО загрузки
+    sys.modules[module_name] = module
+    
+    try:
+        spec.loader.exec_module(module)
+    except ImportError as e:
+        # Если относительный импорт не работает, пробуем абсолютный
+        if str(e).startswith("attempted relative import"):
+            # Перезагружаем файл, заменяя относительные импорты на абсолютные
+            with open(file_path, 'r') as f:
+                code = f.read()
+            # Заменяем относительные импорты на абсолютные
+            code = code.replace('from .', 'from ')
+            code = code.replace('import .', 'import ')
+            exec(compile(code, file_path, 'exec'), module.__dict__)
+    
+    return module
 
-# Загружаем db.py напрямую
-db_path = pathlib.Path(__file__).parent.parent / "db.py"
-spec = importlib.util.spec_from_file_location("db", db_path)
-db_module = importlib.util.module_from_spec(spec)
-sys.modules["db"] = db_module
-spec.loader.exec_module(db_module)
+# Загружаем config.py
+config_path = os.path.join(parent_dir, 'config.py')
+if os.path.exists(config_path):
+    config_module = load_module_with_relative_imports('config', config_path)
 
-# Загружаем models.py напрямую
-models_path = pathlib.Path(__file__).parent.parent / "models.py"
-spec = importlib.util.spec_from_file_location("models", models_path)
-models_module = importlib.util.module_from_spec(spec)
-sys.modules["models"] = models_module
-spec.loader.exec_module(models_module)
+# Загружаем db.py
+db_path = os.path.join(parent_dir, 'db.py')
+if os.path.exists(db_path):
+    db_module = load_module_with_relative_imports('db', db_path)
+    Base = db_module.Base
+else:
+    raise FileNotFoundError(f"db.py not found at {db_path}")
 
-Base = db_module.Base
+# Загружаем models.py
+models_path = os.path.join(parent_dir, 'models.py')
+if os.path.exists(models_path):
+    models_module = load_module_with_relative_imports('models', models_path)
+else:
+    raise FileNotFoundError(f"models.py not found at {models_path}")
+
 target_metadata = Base.metadata
 
 # Получаем DATABASE_URL из переменных окружения
