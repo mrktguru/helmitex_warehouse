@@ -23,7 +23,8 @@ def upgrade() -> None:
     op.execute("CREATE TYPE orderstatus AS ENUM ('pending', 'in_progress', 'completed', 'cancelled')")
     
     # Создание таблицы users
-    op.create_table('users',
+    op.create_table(
+        'users',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('telegram_id', sa.BigInteger(), nullable=False),
         sa.Column('username', sa.String(), nullable=True),
@@ -35,7 +36,8 @@ def upgrade() -> None:
     )
     
     # Создание таблицы warehouses
-    op.create_table('warehouses',
+    op.create_table(
+        'warehouses',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
         sa.Column('location', sa.String(), nullable=True),
@@ -44,7 +46,8 @@ def upgrade() -> None:
     )
     
     # Создание таблицы skus
-    op.create_table('skus',
+    op.create_table(
+        'skus',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('code', sa.String(), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
@@ -57,19 +60,21 @@ def upgrade() -> None:
     )
     
     # Создание таблицы stock
-    op.create_table('stock',
+    op.create_table(
+        'stock',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('warehouse_id', sa.Integer(), nullable=False),
         sa.Column('sku_id', sa.Integer(), nullable=False),
         sa.Column('quantity', sa.Float(), nullable=True),
         sa.Column('updated_at', sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(['sku_id'], ['skus.id'], ),
-        sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
+        sa.ForeignKeyConstraint(['sku_id'], ['skus.id']),
+        sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id']),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Создание таблицы movements
-    op.create_table('movements',
+    op.create_table(
+        'movements',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('warehouse_id', sa.Integer(), nullable=False),
         sa.Column('sku_id', sa.Integer(), nullable=False),
@@ -80,16 +85,17 @@ def upgrade() -> None:
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('notes', sa.String(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(['from_warehouse_id'], ['warehouses.id'], ),
-        sa.ForeignKeyConstraint(['sku_id'], ['skus.id'], ),
-        sa.ForeignKeyConstraint(['to_warehouse_id'], ['warehouses.id'], ),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-        sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
+        sa.ForeignKeyConstraint(['from_warehouse_id'], ['warehouses.id']),
+        sa.ForeignKeyConstraint(['sku_id'], ['skus.id']),
+        sa.ForeignKeyConstraint(['to_warehouse_id'], ['warehouses.id']),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id']),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Создание таблицы orders
-    op.create_table('orders',
+    op.create_table(
+        'orders',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('order_number', sa.String(), nullable=False),
         sa.Column('type', sa.Enum('purchase', 'production', 'sale', name='ordertype'), nullable=False),
@@ -99,4 +105,38 @@ def upgrade() -> None:
         sa.Column('notes', sa.String(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
         sa.Column('completed_at', sa.DateTime(), nullable=True),
-        sa.F
+        sa.ForeignKeyConstraint(['user_id'], ['users.id']),
+        sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id']),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('order_number')
+    )
+    
+    # Создание таблицы order_items
+    op.create_table(
+        'order_items',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('order_id', sa.Integer(), nullable=False),
+        sa.Column('sku_id', sa.Integer(), nullable=False),
+        sa.Column('quantity', sa.Float(), nullable=False),
+        sa.Column('price', sa.Float(), nullable=True),
+        sa.ForeignKeyConstraint(['order_id'], ['orders.id']),
+        sa.ForeignKeyConstraint(['sku_id'], ['skus.id']),
+        sa.PrimaryKeyConstraint('id')
+    )
+
+
+def downgrade() -> None:
+    # Удаление таблиц в обратном порядке
+    op.drop_table('order_items')
+    op.drop_table('orders')
+    op.drop_table('movements')
+    op.drop_table('stock')
+    op.drop_table('skus')
+    op.drop_table('warehouses')
+    op.drop_table('users')
+    
+    # Удаление enum типов
+    op.execute('DROP TYPE IF EXISTS orderstatus')
+    op.execute('DROP TYPE IF EXISTS ordertype')
+    op.execute('DROP TYPE IF EXISTS movementtype')
+    op.execute('DROP TYPE IF EXISTS skutype')
