@@ -1,5 +1,5 @@
 """
-Главный модуль Telegram бота с инлайн-кнопками.
+Главный модуль Telegram бота с инлайн-кнопками и ConversationHandler.
 """
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,6 +16,17 @@ from telegram.ext import (
 from app.database.db import init_db, get_db
 from app.config import TELEGRAM_BOT_TOKEN
 from app.services import user_service
+from app.handlers.arrival_handler import (
+    arrival_start,
+    select_category,
+    select_sku,
+    enter_quantity,
+    confirm_arrival,
+    SELECT_CATEGORY,
+    SELECT_SKU,
+    ENTER_QUANTITY,
+    CONFIRM
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,13 +34,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Состояния для ConversationHandler
-MAIN_MENU = 0
-ARRIVAL_MENU = 1
-PRODUCTION_MENU = 2
-SHIPMENT_MENU = 3
-SETTINGS_MENU = 4
 
 
 # ============= КЛАВИАТУРЫ =============
@@ -90,11 +94,7 @@ def get_settings_keyboard():
     """Меню настроек"""
     keyboard = [
         [
-            InlineKeyboardButton("🏢 Склады", callback_data="settings_warehouses"),
-            InlineKeyboardButton("📦 Товары", callback_data="settings_skus")
-        ],
-        [
-            InlineKeyboardButton("👥 Пользователи", callback_data="settings_users"),
+            InlineKeyboardButton("📦 Товары", callback_data="settings_skus"),
             InlineKeyboardButton("📊 Статистика", callback_data="settings_stats")
         ],
         [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
@@ -163,19 +163,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     
-    elif data == "arrival_add":
-        await query.edit_message_text(
-            "➕ *Добавить приход сырья*\n\n"
-            "Функция в разработке.\n"
-            "Скоро здесь можно будет оформить приход сырья.",
-            reply_markup=get_arrival_keyboard(),
-            parse_mode='Markdown'
-        )
-    
     elif data == "arrival_history":
+        with get_db() as db:
+            from app.services import movement_service
+            from app.database.models import MovementType
+            
+            try:
+                user = update.effective_user
+                db_user = user_service.get_or_create_user(
+                    db=db,
+                    telegram_id=user.id,
+                    username=user.username,
+                    full_name=user.full_name
+                )
+                
+                movements = movement_service.get_user_movements(db, db_user.id, limit=10)
+                # Фильтруем только приходы
+                arrivals = [m for m in movements if m.type == MovementType.in_]
+                
+                if arrivals:
+                    text = "📋 *История прихода сырья:*\n\n"
+                    for mov in arrivals:
+                        text += f"• {mov.sku.name}\n"
+                        text += f"  Количество: {mov.quantity} {mov.sku.unit.value}\n"
+                        text += f"  Дата: {mov.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+                else:
+                    text = "📋 *История прихода сырья*\n\nОпераций пока нет."
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                text = "❌ Ошибка при загрузке истории"
+        
         await query.edit_message_text(
-            "📋 *История прихода сырья*\n\n"
-            "Последние операции прихода будут отображаться здесь.",
+            text,
             reply_markup=get_arrival_keyboard(),
             parse_mode='Markdown'
         )
@@ -216,8 +235,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "shipment_new":
         await query.edit_message_text(
             "➕ *Новая отгрузка*\n\n"
-            "Функция в разработке.\n"
-            "Скоро здесь можно будет оформить отгрузку.",
+            "Функция в разработке.",
             reply_markup=get_shipment_keyboard(),
             parse_mode='Markdown'
         )
@@ -238,30 +256,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     
-    elif data == "settings_warehouses":
-        with get_db() as db:
-            from app.services import warehouse_service
-            try:
-                whs = warehouse_service.get_all_warehouses(db)
-                if whs:
-                    text = "🏢 *Склады:*\n\n"
-                    for wh in whs:
-                        text += f"• {wh.name}"
-                        if wh.location:
-                            text += f" ({wh.location})"
-                        text += "\n"
-                else:
-                    text = "🏢 *Склады*\n\nСкладов пока нет."
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                text = "❌ Ошибка при загрузке складов"
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=get_settings_keyboard(),
-            parse_mode='Markdown'
-        )
-    
     elif data == "settings_skus":
         with get_db() as db:
             from app.services import sku_service
@@ -270,7 +264,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if skus:
                     text = "📦 *Товары:*\n\n"
                     for sku in skus[:10]:
-                        text += f"• {sku.code} - {sku.name}\n"
+                        text += f"• {sku.name}"
+                        if sku.category:
+                            text += f" ({sku.category.value})"
+                        text += f" - {sku.unit.value}\n"
                     if len(skus) > 10:
                         text += f"\n_...и еще {len(skus) - 10} товаров_"
                 else:
@@ -281,13 +278,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text(
             text,
-            reply_markup=get_settings_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "settings_users":
-        await query.edit_message_text(
-            "👥 *Пользователи*\n\nУправление пользователями в разработке.",
             reply_markup=get_settings_keyboard(),
             parse_mode='Markdown'
         )
@@ -316,8 +306,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Остатки
     elif data == "stock":
+        with get_db() as db:
+            from app.services import stock_service, warehouse_service
+            
+            try:
+                warehouse = warehouse_service.get_default_warehouse(db)
+                
+                if not warehouse:
+                    text = "📊 *Остатки*\n\nСклад не найден."
+                else:
+                    stocks = stock_service.get_warehouse_stock(db, warehouse.id)
+                    
+                    if stocks:
+                        text = f"📊 *Остатки на складе {warehouse.name}:*\n\n"
+                        for stock in stocks[:15]:
+                            text += f"• {stock.sku.name}\n"
+                            text += f"  {stock.quantity} {stock.sku.unit.value}\n"
+                        if len(stocks) > 15:
+                            text += f"\n_...и еще {len(stocks) - 15} позиций_"
+                    else:
+                        text = "📊 *Остатки*\n\nНет остатков на складе."
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                text = "❌ Ошибка при загрузке остатков"
+        
         await query.edit_message_text(
-            "📊 *Остатки на складах*\n\nФункция в разработке.",
+            text,
             reply_markup=get_back_keyboard(),
             parse_mode='Markdown'
         )
@@ -348,6 +362,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена текущей операции"""
+    await update.message.reply_text(
+        "❌ Операция отменена",
+        reply_markup=get_main_keyboard()
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 # ============= MAIN =============
 
 def main():
@@ -366,8 +390,22 @@ def main():
         logger.info("Создание Telegram приложения...")
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+        # ConversationHandler для прихода сырья
+        arrival_conv_handler = ConversationHandler(
+            entry_points=[CallbackQueryHandler(arrival_start, pattern="^arrival_add$")],
+            states={
+                SELECT_CATEGORY: [CallbackQueryHandler(select_category, pattern="^cat_")],
+                SELECT_SKU: [CallbackQueryHandler(select_sku, pattern="^sku_")],
+                ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
+                CONFIRM: [CallbackQueryHandler(confirm_arrival, pattern="^(confirm_arrival|cancel_arrival)$")]
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+            allow_reentry=True
+        )
+
         # Регистрация обработчиков
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(arrival_conv_handler)
         application.add_handler(CallbackQueryHandler(button_handler))
 
         logger.info("✅ Обработчики зарегистрированы")
