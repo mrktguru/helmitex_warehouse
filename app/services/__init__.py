@@ -1,17 +1,19 @@
 """
-Сервисы бизнес-логики.
+Модуль сервисов для работы с бизнес-логикой.
 """
 
-from . import category_service
-from . import raw_material_service
-from . import semi_product_service
-from . import finished_product_service
-from . import recipe_service
+from . import user_service
+from . import warehouse_service
+from . import sku_service
+from . import stock_service
+from . import movement_service
+from . import order_service
 
 __all__ = [
-    "category_service",
-    "raw_material_service",
-    "semi_product_service",
-    "finished_product_service",
-    "recipe_service",
+    "user_service",
+    "warehouse_service",
+    "sku_service",
+    "stock_service",
+    "movement_service",
+    "order_service",
 ]
