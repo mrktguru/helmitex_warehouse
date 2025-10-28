@@ -8,22 +8,34 @@ from alembic import context
 # Добавляем корневую директорию в путь
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# this is the Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Импортируем Base и модели
-from db import Base
-import models
+# Хак для импорта с относительными путями
+import importlib.util
+import pathlib
 
-# add your model's MetaData object here
+# Загружаем db.py напрямую
+db_path = pathlib.Path(__file__).parent.parent / "db.py"
+spec = importlib.util.spec_from_file_location("db", db_path)
+db_module = importlib.util.module_from_spec(spec)
+sys.modules["db"] = db_module
+spec.loader.exec_module(db_module)
+
+# Загружаем models.py напрямую
+models_path = pathlib.Path(__file__).parent.parent / "models.py"
+spec = importlib.util.spec_from_file_location("models", models_path)
+models_module = importlib.util.module_from_spec(spec)
+sys.modules["models"] = models_module
+spec.loader.exec_module(models_module)
+
+Base = db_module.Base
 target_metadata = Base.metadata
 
 # Получаем DATABASE_URL из переменных окружения
-database_url = os.getenv('DATABASE_URL', 'postgresql+psycopg2://warehouse:warehouse@localhost:5432/warehouse')
+database_url = os.getenv('DATABASE_URL', 'postgresql+psycopg2://warehouse:warehouse@db:5432/warehouse')
 config.set_main_option('sqlalchemy.url', database_url)
 
 
