@@ -41,21 +41,10 @@ Base = declarative_base()
 
 
 def init_db():
-    """
-    Инициализация базы данных.
-    Создает все таблицы, определенные в моделях.
-    """
-    try:
-        logger.info("Инициализация базы данных...")
-        from app.database.models import (
-            SKU, Category, Recipe, RecipeComponent, 
-            Barrel, Production, SemiBatch, ProductionUsedRaw
-        )
-        Base.metadata.create_all(bind=engine)
-        logger.info("База данных успешно инициализирована")
-    except Exception as e:
-        logger.error(f"Ошибка при инициализации базы данных: {e}", exc_info=True)
-        raise
+    """Инициализация базы данных - создание всех таблиц."""
+    from . import models  # Импортируем модели
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully!")
 
 
 @contextmanager
