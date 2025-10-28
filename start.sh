@@ -30,4 +30,5 @@ else
 fi
 
 echo "Starting Telegram bot..."
-python bot.py
+# Запускаем бота из папки app
+cd /app/app && python bot.py
