@@ -7,6 +7,7 @@ Create Date: 2025-01-27 22:32:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '001'
@@ -16,11 +17,38 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Создание enum типов
-    op.execute("CREATE TYPE skutype AS ENUM ('raw', 'finished')")
-    op.execute("CREATE TYPE movementtype AS ENUM ('in', 'out', 'transfer', 'adjustment')")
-    op.execute("CREATE TYPE ordertype AS ENUM ('purchase', 'production', 'sale')")
-    op.execute("CREATE TYPE orderstatus AS ENUM ('pending', 'in_progress', 'completed', 'cancelled')")
+    # Создание enum типов с проверкой существования
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE skutype AS ENUM ('raw', 'finished');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE movementtype AS ENUM ('in', 'out', 'transfer', 'adjustment');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE ordertype AS ENUM ('purchase', 'production', 'sale');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE orderstatus AS ENUM ('pending', 'in_progress', 'completed', 'cancelled');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
     
     # Создание таблицы users
     op.create_table(
@@ -51,7 +79,7 @@ def upgrade() -> None:
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('code', sa.String(), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
-        sa.Column('type', sa.Enum('raw', 'finished', name='skutype'), nullable=False),
+        sa.Column('type', postgresql.ENUM('raw', 'finished', name='skutype', create_type=False), nullable=False),
         sa.Column('unit', sa.String(), nullable=True),
         sa.Column('min_stock', sa.Float(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
@@ -78,7 +106,7 @@ def upgrade() -> None:
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('warehouse_id', sa.Integer(), nullable=False),
         sa.Column('sku_id', sa.Integer(), nullable=False),
-        sa.Column('type', sa.Enum('in', 'out', 'transfer', 'adjustment', name='movementtype'), nullable=False),
+        sa.Column('type', postgresql.ENUM('in', 'out', 'transfer', 'adjustment', name='movementtype', create_type=False), nullable=False),
         sa.Column('quantity', sa.Float(), nullable=False),
         sa.Column('from_warehouse_id', sa.Integer(), nullable=True),
         sa.Column('to_warehouse_id', sa.Integer(), nullable=True),
@@ -98,8 +126,8 @@ def upgrade() -> None:
         'orders',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('order_number', sa.String(), nullable=False),
-        sa.Column('type', sa.Enum('purchase', 'production', 'sale', name='ordertype'), nullable=False),
-        sa.Column('status', sa.Enum('pending', 'in_progress', 'completed', 'cancelled', name='orderstatus'), nullable=True),
+        sa.Column('type', postgresql.ENUM('purchase', 'production', 'sale', name='ordertype', create_type=False), nullable=False),
+        sa.Column('status', postgresql.ENUM('pending', 'in_progress', 'completed', 'cancelled', name='orderstatus', create_type=False), nullable=True),
         sa.Column('warehouse_id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('notes', sa.String(), nullable=True),
@@ -136,7 +164,7 @@ def downgrade() -> None:
     op.drop_table('users')
     
     # Удаление enum типов
-    op.execute('DROP TYPE IF EXISTS orderstatus')
-    op.execute('DROP TYPE IF EXISTS ordertype')
-    op.execute('DROP TYPE IF EXISTS movementtype')
-    op.execute('DROP TYPE IF EXISTS skutype')
+    op.execute('DROP TYPE IF EXISTS orderstatus CASCADE')
+    op.execute('DROP TYPE IF EXISTS ordertype CASCADE')
+    op.execute('DROP TYPE IF EXISTS movementtype CASCADE')
+    op.execute('DROP TYPE IF EXISTS skutype CASCADE')
