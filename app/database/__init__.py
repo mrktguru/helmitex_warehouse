@@ -13,6 +13,8 @@ from .models import (
     Order,
     OrderItem,
     SKUType,
+    CategoryType,
+    UnitType,
     MovementType,
     OrderType,
     OrderStatus
@@ -32,6 +34,8 @@ __all__ = [
     "Order",
     "OrderItem",
     "SKUType",
+    "CategoryType",
+    "UnitType",
     "MovementType",
     "OrderType",
     "OrderStatus",
