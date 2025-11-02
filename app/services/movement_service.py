@@ -28,8 +28,11 @@ def create_movement(
     Создать движение товара и обновить остатки.
     """
     # Валидация
-    if quantity <= 0:
+    if movement_type != MovementType.adjustment and quantity <= 0:
         raise ValueError("Количество должно быть положительным")
+    
+    if movement_type == MovementType.adjustment and quantity == 0:
+        raise ValueError("Количество корректировки не может быть нулевым")
     
     if movement_type == MovementType.transfer:
         if not from_warehouse_id or not to_warehouse_id:
@@ -70,13 +73,12 @@ def create_movement(
             # Для корректировки quantity может быть отрицательным
             update_stock(db, warehouse_id, sku_id, quantity)
         
-        db.commit()
+        db.flush()
         db.refresh(movement)
         logger.info(f"Created movement: type={movement_type}, warehouse={warehouse_id}, sku={sku_id}, qty={quantity}")
         return movement
     
     except Exception as e:
-        db.rollback()
         logger.error(f"Failed to create movement: {e}")
         raise
 

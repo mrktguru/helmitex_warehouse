@@ -50,21 +50,23 @@ def update_stock(
     
     if not stock:
         # Создаем новую запись остатка
+        if quantity_change < 0:
+            raise ValueError(f"Невозможно создать остаток с отрицательным количеством: {quantity_change}")
         stock = Stock(
             warehouse_id=warehouse_id,
             sku_id=sku_id,
-            quantity=max(0, quantity_change)  # Не допускаем отрицательных остатков
+            quantity=quantity_change
         )
         db.add(stock)
     else:
         # Обновляем существующий остаток
         new_quantity = stock.quantity + quantity_change
         if new_quantity < 0:
-            raise ValueError(f"Недостаточно товара на складе. Доступно: {stock.quantity}")
+            raise ValueError(f"Недостаточно товара на складе. Доступно: {stock.quantity}, требуется: {abs(quantity_change)}")
         stock.quantity = new_quantity
         stock.updated_at = datetime.utcnow()
     
-    db.commit()
+    db.flush()
     db.refresh(stock)
     logger.info(f"Updated stock: warehouse={warehouse_id}, sku={sku_id}, change={quantity_change}, new_qty={stock.quantity}")
     return stock

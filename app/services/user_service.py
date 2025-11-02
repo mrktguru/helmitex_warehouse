@@ -30,7 +30,7 @@ def get_or_create_user(
             is_admin=False
         )
         db.add(user)
-        db.commit()
+        db.flush()
         db.refresh(user)
         logger.info(f"Created new user: {telegram_id} ({username})")
     
@@ -54,5 +54,5 @@ def set_admin(db: Session, telegram_id: int, is_admin: bool = True):
     
     if user:
         user.is_admin = is_admin
-        db.commit()
+        db.flush()
         logger.info(f"User {telegram_id} admin status set to {is_admin}")
