@@ -56,36 +56,6 @@ def format_sku_list(skus: List[Any]) -> str:
     return "\n".join(lines)
 
 
-def format_recipe_list(recipes: List[Any]) -> str:
-    """
-    Форматирует список рецептов для отображения.
-    
-    Args:
-        recipes: Список объектов Recipe
-        
-    Returns:
-        Отформатированная строка
-    """
-    if not recipes:
-        return "📋 Рецепты не найдены"
-    
-    lines = ["📋 Список рецептов:\n"]
-    for recipe in recipes:
-        product_name = recipe.semi_sku.name if recipe.semi_sku else "Неизвестно"
-        status_emoji = {
-            "draft": "📝",
-            "active": "✅",
-            "archived": "📦"
-        }.get(recipe.status.value, "❓")
-        
-        lines.append(
-            f"{status_emoji} ID:{recipe.id} - {product_name} "
-            f"(выход: {recipe.theoretical_yield}%)"
-        )
-    
-    return "\n".join(lines)
-
-
 def format_category_list(categories: List[Any]) -> str:
     """
     Форматирует список категорий для отображения.

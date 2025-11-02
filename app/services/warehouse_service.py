@@ -24,7 +24,7 @@ def create_warehouse(
         is_default=is_default
     )
     db.add(warehouse)
-    db.commit()
+    db.flush()
     db.refresh(warehouse)
     logger.info(f"Created warehouse: {name} (ID: {warehouse.id})")
     return warehouse
@@ -76,14 +76,11 @@ def update_warehouse(
     if is_default is not None:
         # Если устанавливаем этот склад как default, снимаем флаг с других
         if is_default:
-            db.execute(
-                select(Warehouse).where(Warehouse.is_default == True)
-            ).scalars().all()
             for wh in db.execute(select(Warehouse)).scalars().all():
                 wh.is_default = False
         warehouse.is_default = is_default
     
-    db.commit()
+    db.flush()
     db.refresh(warehouse)
     logger.info(f"Updated warehouse {warehouse_id}")
     return warehouse
@@ -99,7 +96,7 @@ def set_default_warehouse(db: Session, warehouse_id: int) -> Optional[Warehouse]
     warehouse = get_warehouse(db, warehouse_id)
     if warehouse:
         warehouse.is_default = True
-        db.commit()
+        db.flush()
         db.refresh(warehouse)
         logger.info(f"Set warehouse {warehouse_id} as default")
     

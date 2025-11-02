@@ -16,17 +16,6 @@ from telegram.ext import (
 from app.database.db import init_db, get_db
 from app.config import TELEGRAM_BOT_TOKEN
 from app.services import user_service
-from app.handlers.arrival_handler import (
-    arrival_start,
-    select_category,
-    select_sku,
-    enter_quantity,
-    confirm_arrival,
-    SELECT_CATEGORY,
-    SELECT_SKU,
-    ENTER_QUANTITY,
-    CONFIRM
-)
 
 # Настройка логирования
 logging.basicConfig(
@@ -390,22 +379,8 @@ def main():
         logger.info("Создание Telegram приложения...")
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        # ConversationHandler для прихода сырья
-        arrival_conv_handler = ConversationHandler(
-            entry_points=[CallbackQueryHandler(arrival_start, pattern="^arrival_add$")],
-            states={
-                SELECT_CATEGORY: [CallbackQueryHandler(select_category, pattern="^cat_")],
-                SELECT_SKU: [CallbackQueryHandler(select_sku, pattern="^sku_")],
-                ENTER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_quantity)],
-                CONFIRM: [CallbackQueryHandler(confirm_arrival, pattern="^(confirm_arrival|cancel_arrival)$")]
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-            allow_reentry=True
-        )
-
         # Регистрация обработчиков
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(arrival_conv_handler)
         application.add_handler(CallbackQueryHandler(button_handler))
 
         logger.info("✅ Обработчики зарегистрированы")

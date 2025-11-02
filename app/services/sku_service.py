@@ -38,7 +38,7 @@ def create_sku(
         min_stock=min_stock
     )
     db.add(sku)
-    db.commit()
+    db.flush()
     db.refresh(sku)
     logger.info(f"Created SKU: {code} - {name} (ID: {sku.id})")
     return sku
@@ -103,7 +103,7 @@ def update_sku(
     if min_stock is not None:
         sku.min_stock = min_stock
     
-    db.commit()
+    db.flush()
     db.refresh(sku)
     logger.info(f"Updated SKU {sku_id}")
     return sku

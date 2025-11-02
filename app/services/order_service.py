@@ -53,7 +53,7 @@ def create_order(
         )
         db.add(order_item)
     
-    db.commit()
+    db.flush()
     db.refresh(order)
     logger.info(f"Created order: {order.order_number} (ID: {order.id})")
     return order
@@ -108,7 +108,7 @@ def update_order_status(
     if new_status == OrderStatus.completed:
         order.completed_at = datetime.utcnow()
     
-    db.commit()
+    db.flush()
     db.refresh(order)
     logger.info(f"Updated order {order_id} status to {new_status}")
     return order
@@ -154,7 +154,7 @@ def complete_order(
     order.status = OrderStatus.completed
     order.completed_at = datetime.utcnow()
     
-    db.commit()
+    db.flush()
     db.refresh(order)
     logger.info(f"Completed order {order.order_number}")
     return order
@@ -170,7 +170,7 @@ def cancel_order(db: Session, order_id: int) -> Order:
         raise ValueError("Нельзя отменить завершенный заказ")
     
     order.status = OrderStatus.cancelled
-    db.commit()
+    db.flush()
     db.refresh(order)
     logger.info(f"Cancelled order {order.order_number}")
     return order

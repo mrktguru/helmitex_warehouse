@@ -16,7 +16,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     # Регистрируем пользователя в БД
-    with next(get_db()) as db:
+    with get_db() as db:
         db_user = user_service.get_or_create_user(
             db=db,
             telegram_id=user.id,
@@ -74,7 +74,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /status"""
-    with next(get_db()) as db:
+    with get_db() as db:
         from app.services import warehouse_service, sku_service
         
         warehouses_count = len(warehouse_service.get_all_warehouses(db))
