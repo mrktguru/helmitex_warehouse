@@ -1,21 +1,44 @@
 """
-Главный модуль Telegram бота с инлайн-кнопками и ConversationHandler.
+Главный файл Telegram бота для системы управления складом.
+
+Этот модуль:
+- Инициализирует Application
+- Регистрирует все handlers
+- Настраивает команды бота
+- Обрабатывает ошибки
+- Управляет жизненным циклом приложения
 """
+
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime
+from typing import Optional
+
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes,
-    ConversationHandler,
     MessageHandler,
-    filters
+    ContextTypes,
+    filters,
 )
+from telegram.error import TelegramError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.database.db import init_db, get_db
-from app.config import TELEGRAM_BOT_TOKEN
-from app.services import user_service
+from app.config import settings
+from app.database import User, get_session, engine
+from app.handlers import (
+    get_arrival_handler,
+    get_production_handler,
+    get_packing_handler,
+    get_shipment_handler,
+    get_stock_handler,
+    get_history_handler,
+    get_admin_warehouse_handler,
+    get_admin_users_handler,
+    get_handler_commands,
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,377 +48,462 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ============= КЛАВИАТУРЫ =============
+# ============================================================================
+# MIDDLEWARE ДЛЯ СЕССИЙ БД
+# ============================================================================
 
-def get_main_keyboard():
-    """Главное меню с инлайн-кнопками"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📥 Приход сырья", callback_data="arrival"),
-            InlineKeyboardButton("🏭 Выпуск продукции", callback_data="production")
-        ],
-        [
-            InlineKeyboardButton("📤 Отгрузка", callback_data="shipment"),
-            InlineKeyboardButton("⚙️ Настройки", callback_data="settings")
-        ],
-        [
-            InlineKeyboardButton("📊 Остатки", callback_data="stock"),
-            InlineKeyboardButton("📋 История", callback_data="history")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ Справка", callback_data="help")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_arrival_keyboard():
-    """Меню прихода сырья"""
-    keyboard = [
-        [InlineKeyboardButton("➕ Добавить приход", callback_data="arrival_add")],
-        [InlineKeyboardButton("📋 История прихода", callback_data="arrival_history")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+async def db_session_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Middleware для создания и управления сессиями БД.
+    
+    Создает новую сессию для каждого обновления и сохраняет её в context.bot_data.
+    """
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        context.bot_data['db_session'] = session
+        try:
+            # Обработка обновления происходит здесь
+            yield
+            # Автоматический commit при успехе
+            await session.commit()
+        except Exception as e:
+            # Автоматический rollback при ошибке
+            await session.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            # Очистка сессии
+            context.bot_data.pop('db_session', None)
 
 
-def get_production_keyboard():
-    """Меню выпуска продукции"""
-    keyboard = [
-        [InlineKeyboardButton("➕ Новое производство", callback_data="production_new")],
-        [InlineKeyboardButton("📋 История производства", callback_data="production_history")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# ============================================================================
+# КОМАНДА /START
+# ============================================================================
 
-
-def get_shipment_keyboard():
-    """Меню отгрузки"""
-    keyboard = [
-        [InlineKeyboardButton("➕ Новая отгрузка", callback_data="shipment_new")],
-        [InlineKeyboardButton("📋 История отгрузок", callback_data="shipment_history")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_settings_keyboard():
-    """Меню настроек"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📦 Товары", callback_data="settings_skus"),
-            InlineKeyboardButton("📊 Статистика", callback_data="settings_stats")
-        ],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_back_keyboard():
-    """Кнопка назад"""
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============= HANDLERS =============
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает команду /start.
+    
+    Регистрирует нового пользователя или приветствует существующего.
+    """
     user = update.effective_user
+    session: AsyncSession = context.bot_data['db_session']
     
-    # Регистрируем пользователя
-    with get_db() as db:
-        db_user = user_service.get_or_create_user(
-            db=db,
-            telegram_id=user.id,
-            username=user.username,
-            full_name=user.full_name
-        )
-        is_admin = db_user.is_admin
-    
-    welcome_text = (
-        f"🏭 *Helmitex Warehouse*\n\n"
-        f"Добро пожаловать, {user.first_name}!\n\n"
-        "Выберите действие:"
-    )
-    
-    if is_admin:
-        welcome_text += "\n\n👑 _У вас есть права администратора_"
-    
-    await update.message.reply_text(
-        welcome_text,
-        reply_markup=get_main_keyboard(),
-        parse_mode='Markdown'
-    )
-
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на инлайн-кнопки"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    # Главное меню
-    if data == "main_menu":
-        await query.edit_message_text(
-            "🏭 *Helmitex Warehouse*\n\nВыберите действие:",
-            reply_markup=get_main_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Приход сырья
-    elif data == "arrival":
-        await query.edit_message_text(
-            "📥 *Приход сырья*\n\nВыберите действие:",
-            reply_markup=get_arrival_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "arrival_history":
-        with get_db() as db:
-            from app.services import movement_service
-            from app.database.models import MovementType
-            
-            try:
-                user = update.effective_user
-                db_user = user_service.get_or_create_user(
-                    db=db,
-                    telegram_id=user.id,
-                    username=user.username,
-                    full_name=user.full_name
-                )
-                
-                movements = movement_service.get_user_movements(db, db_user.id, limit=10)
-                # Фильтруем только приходы
-                arrivals = [m for m in movements if m.type == MovementType.in_]
-                
-                if arrivals:
-                    text = "📋 *История прихода сырья:*\n\n"
-                    for mov in arrivals:
-                        text += f"• {mov.sku.name}\n"
-                        text += f"  Количество: {mov.quantity} {mov.sku.unit.value}\n"
-                        text += f"  Дата: {mov.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-                else:
-                    text = "📋 *История прихода сырья*\n\nОпераций пока нет."
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                text = "❌ Ошибка при загрузке истории"
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=get_arrival_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Выпуск продукции
-    elif data == "production":
-        await query.edit_message_text(
-            "🏭 *Выпуск продукции*\n\nВыберите действие:",
-            reply_markup=get_production_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "production_new":
-        await query.edit_message_text(
-            "➕ *Новое производство*\n\n"
-            "Функция в разработке.\n"
-            "Скоро здесь можно будет оформить выпуск продукции.",
-            reply_markup=get_production_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "production_history":
-        await query.edit_message_text(
-            "📋 *История производства*\n\n"
-            "Последние операции производства будут отображаться здесь.",
-            reply_markup=get_production_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Отгрузка
-    elif data == "shipment":
-        await query.edit_message_text(
-            "📤 *Отгрузка*\n\nВыберите действие:",
-            reply_markup=get_shipment_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "shipment_new":
-        await query.edit_message_text(
-            "➕ *Новая отгрузка*\n\n"
-            "Функция в разработке.",
-            reply_markup=get_shipment_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "shipment_history":
-        await query.edit_message_text(
-            "📋 *История отгрузок*\n\n"
-            "Последние отгрузки будут отображаться здесь.",
-            reply_markup=get_shipment_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Настройки
-    elif data == "settings":
-        await query.edit_message_text(
-            "⚙️ *Настройки*\n\nВыберите раздел:",
-            reply_markup=get_settings_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "settings_skus":
-        with get_db() as db:
-            from app.services import sku_service
-            try:
-                skus = sku_service.get_all_skus(db)
-                if skus:
-                    text = "📦 *Товары:*\n\n"
-                    for sku in skus[:10]:
-                        text += f"• {sku.name}"
-                        if sku.category:
-                            text += f" ({sku.category.value})"
-                        text += f" - {sku.unit.value}\n"
-                    if len(skus) > 10:
-                        text += f"\n_...и еще {len(skus) - 10} товаров_"
-                else:
-                    text = "📦 *Товары*\n\nТоваров пока нет."
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                text = "❌ Ошибка при загрузке товаров"
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=get_settings_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    elif data == "settings_stats":
-        with get_db() as db:
-            from app.services import warehouse_service, sku_service
-            try:
-                wh_count = len(warehouse_service.get_all_warehouses(db))
-                sku_count = len(sku_service.get_all_skus(db))
-                text = (
-                    "📊 *Статистика системы*\n\n"
-                    f"🏢 Складов: {wh_count}\n"
-                    f"📦 Товаров: {sku_count}\n"
-                    f"✅ Статус: Работает"
-                )
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                text = "❌ Ошибка при загрузке статистики"
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=get_settings_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Остатки
-    elif data == "stock":
-        with get_db() as db:
-            from app.services import stock_service, warehouse_service
-            
-            try:
-                warehouse = warehouse_service.get_default_warehouse(db)
-                
-                if not warehouse:
-                    text = "📊 *Остатки*\n\nСклад не найден."
-                else:
-                    stocks = stock_service.get_warehouse_stock(db, warehouse.id)
-                    
-                    if stocks:
-                        text = f"📊 *Остатки на складе {warehouse.name}:*\n\n"
-                        for stock in stocks[:15]:
-                            text += f"• {stock.sku.name}\n"
-                            text += f"  {stock.quantity} {stock.sku.unit.value}\n"
-                        if len(stocks) > 15:
-                            text += f"\n_...и еще {len(stocks) - 15} позиций_"
-                    else:
-                        text = "📊 *Остатки*\n\nНет остатков на складе."
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                text = "❌ Ошибка при загрузке остатков"
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=get_back_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # История
-    elif data == "history":
-        await query.edit_message_text(
-            "📋 *История операций*\n\nФункция в разработке.",
-            reply_markup=get_back_keyboard(),
-            parse_mode='Markdown'
-        )
-    
-    # Справка
-    elif data == "help":
-        help_text = (
-            "ℹ️ *Справка по системе*\n\n"
-            "*Основные разделы:*\n\n"
-            "📥 *Приход сырья* - регистрация поступления материалов\n"
-            "🏭 *Выпуск продукции* - учет производства\n"
-            "📤 *Отгрузка* - отгрузка готовой продукции\n"
-            "⚙️ *Настройки* - управление системой\n\n"
-            "Для начала работы выберите нужный раздел в главном меню."
-        )
-        await query.edit_message_text(
-            help_text,
-            reply_markup=get_back_keyboard(),
-            parse_mode='Markdown'
-        )
-
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена текущей операции"""
-    await update.message.reply_text(
-        "❌ Операция отменена",
-        reply_markup=get_main_keyboard()
-    )
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
-# ============= MAIN =============
-
-def main():
-    """Запуск бота"""
-    logger.info("=" * 80)
-    logger.info("Запуск Helmitex Warehouse Bot")
-    logger.info("=" * 80)
-
     try:
-        # Инициализация базы данных
-        logger.info("Инициализация базы данных...")
-        init_db()
-        logger.info("✅ База данных инициализирована")
-
-        # Создание приложения
-        logger.info("Создание Telegram приложения...")
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-        # Регистрация обработчиков
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button_handler))
-
-        logger.info("✅ Обработчики зарегистрированы")
-
-        # Запуск polling
-        logger.info("🚀 Запуск polling...")
-        logger.info("Бот готов к работе!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-    except KeyboardInterrupt:
-        logger.info("⏹️ Бот остановлен пользователем")
+        # Проверка существования пользователя
+        stmt = select(User).where(User.telegram_id == user.id)
+        existing_user = await session.scalar(stmt)
+        
+        if existing_user:
+            # Обновление информации
+            existing_user.username = user.username
+            existing_user.last_active = datetime.utcnow()
+            await session.commit()
+            
+            welcome_text = (
+                f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
+                "Выберите действие из меню ниже:"
+            )
+            is_new = False
+        else:
+            # Регистрация нового пользователя
+            new_user = User(
+                telegram_id=user.id,
+                username=user.username,
+                is_active=True,
+                # По умолчанию нет прав, админ должен назначить
+                can_receive_materials=False,
+                can_produce=False,
+                can_pack=False,
+                can_ship=False,
+                is_admin=False
+            )
+            session.add(new_user)
+            await session.commit()
+            
+            welcome_text = (
+                f"👋 Добро пожаловать в систему, <b>{user.first_name}!</b>\n\n"
+                "✅ Вы успешно зарегистрированы.\n\n"
+                "⚠️ <b>Права доступа не назначены.</b>\n"
+                "Обратитесь к администратору для получения прав.\n\n"
+                "После назначения прав вам будут доступны операции:"
+            )
+            is_new = True
+        
+        # Главное меню
+        keyboard = get_main_menu_keyboard(existing_user if not is_new else new_user)
+        
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+        
     except Exception as e:
-        logger.critical(f"❌ Критическая ошибка: {e}", exc_info=True)
-        raise
+        logger.error(f"Error in start_command: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка при регистрации. Попробуйте позже."
+        )
 
 
-if __name__ == "__main__":
+# ============================================================================
+# КОМАНДА /HELP
+# ============================================================================
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает команду /help.
+    
+    Показывает справку по доступным командам.
+    """
+    user = update.effective_user
+    session: AsyncSession = context.bot_data['db_session']
+    
+    try:
+        # Получение пользователя
+        stmt = select(User).where(User.telegram_id == user.id)
+        db_user = await session.scalar(stmt)
+        
+        if not db_user:
+            await update.message.reply_text(
+                "❌ Вы не зарегистрированы. Используйте /start"
+            )
+            return
+        
+        help_text = (
+            "📖 <b>Справка по системе</b>\n\n"
+            "<b>Основные команды:</b>\n"
+            "/start - Запуск бота и регистрация\n"
+            "/help - Эта справка\n"
+            "/cancel - Отмена текущей операции\n\n"
+        )
+        
+        # Операционные команды
+        if any([db_user.can_receive_materials, db_user.can_produce, 
+                db_user.can_pack, db_user.can_ship]):
+            help_text += "<b>Операции:</b>\n"
+            
+            if db_user.can_receive_materials:
+                help_text += "📥 /arrival - Приемка сырья на склад\n"
+            
+            if db_user.can_produce:
+                help_text += "🏭 /production - Производство полуфабрикатов\n"
+            
+            if db_user.can_pack:
+                help_text += "📦 /packing - Фасовка готовой продукции\n"
+            
+            if db_user.can_ship:
+                help_text += "🚚 /shipment - Отгрузка продукции\n"
+            
+            help_text += "\n"
+        
+        # Информационные команды (доступны всем)
+        help_text += (
+            "<b>Информация:</b>\n"
+            "📊 /stock - Просмотр остатков\n"
+            "📜 /history - История операций\n\n"
+        )
+        
+        # Административные команды
+        if db_user.is_admin:
+            help_text += (
+                "<b>Администрирование:</b>\n"
+                "👨‍💼 /admin - Административная панель\n"
+                "  • Управление складами\n"
+                "  • Управление номенклатурой\n"
+                "  • Технологические карты\n"
+                "  • Управление пользователями\n\n"
+            )
+        
+        help_text += (
+            "<b>О системе:</b>\n"
+            "Система управления складом для производства "
+            "краски и шпатлевки с полным циклом:\n"
+            "  Сырье → Производство → Фасовка → Отгрузка\n\n"
+            "По вопросам обращайтесь к администратору."
+        )
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='main_menu')]
+        ])
+        
+        await update.message.reply_text(
+            help_text,
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in help_command: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка. Попробуйте позже."
+        )
+
+
+# ============================================================================
+# ГЛАВНОЕ МЕНЮ
+# ============================================================================
+
+def get_main_menu_keyboard(user: Optional[User] = None) -> InlineKeyboardMarkup:
+    """
+    Создает клавиатуру главного меню на основе прав пользователя.
+    
+    Args:
+        user: Объект пользователя из БД
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с доступными кнопками
+    """
+    buttons = []
+    
+    if user:
+        # Операционные кнопки
+        if user.can_receive_materials:
+            buttons.append([InlineKeyboardButton("📥 Приемка сырья", callback_data='arrival_start')])
+        
+        if user.can_produce:
+            buttons.append([InlineKeyboardButton("🏭 Производство", callback_data='production_start')])
+        
+        if user.can_pack:
+            buttons.append([InlineKeyboardButton("📦 Фасовка", callback_data='packing_start')])
+        
+        if user.can_ship:
+            buttons.append([InlineKeyboardButton("🚚 Отгрузка", callback_data='shipment_start')])
+        
+        # Информационные кнопки (доступны всем)
+        buttons.append([InlineKeyboardButton("📊 Остатки", callback_data='stock_view_start')])
+        buttons.append([InlineKeyboardButton("📜 История", callback_data='history_start')])
+        
+        # Административная кнопка
+        if user.is_admin:
+            buttons.append([InlineKeyboardButton("👨‍💼 Администрирование", callback_data='admin_panel_start')])
+        
+        # Справка
+        buttons.append([InlineKeyboardButton("❓ Справка", callback_data='help')])
+    else:
+        # Меню для незарегистрированного пользователя
+        buttons.append([InlineKeyboardButton("📖 Справка", callback_data='help')])
+    
+    return InlineKeyboardMarkup(buttons)
+
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Показывает главное меню.
+    """
+    query = update.callback_query
+    if query:
+        await query.answer()
+    
+    user = update.effective_user
+    session: AsyncSession = context.bot_data['db_session']
+    
+    try:
+        # Получение пользователя
+        stmt = select(User).where(User.telegram_id == user.id)
+        db_user = await session.scalar(stmt)
+        
+        if not db_user:
+            text = (
+                "❌ Вы не зарегистрированы.\n"
+                "Используйте /start для регистрации."
+            )
+            keyboard = None
+        else:
+            # Обновление времени активности
+            db_user.last_active = datetime.utcnow()
+            await session.commit()
+            
+            text = (
+                f"🏠 <b>Главное меню</b>\n\n"
+                f"Пользователь: @{db_user.username or 'неизвестен'}\n"
+            )
+            
+            # Показ прав
+            permissions = []
+            if db_user.can_receive_materials:
+                permissions.append("Приемка")
+            if db_user.can_produce:
+                permissions.append("Производство")
+            if db_user.can_pack:
+                permissions.append("Фасовка")
+            if db_user.can_ship:
+                permissions.append("Отгрузка")
+            if db_user.is_admin:
+                permissions.append("Администратор")
+            
+            if permissions:
+                text += f"Права: {', '.join(permissions)}\n"
+            
+            text += "\nВыберите действие:"
+            
+            keyboard = get_main_menu_keyboard(db_user)
+        
+        if query:
+            await query.message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+        
+    except Exception as e:
+        logger.error(f"Error in show_main_menu: {e}")
+        error_text = "❌ Произошла ошибка при загрузке меню."
+        
+        if query:
+            await query.message.edit_text(error_text)
+        else:
+            await update.message.reply_text(error_text)
+
+
+# ============================================================================
+# ОБРАБОТКА ОШИБОК
+# ============================================================================
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает ошибки, возникающие при работе бота.
+    """
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Пытаемся отправить сообщение пользователю
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "❌ Произошла ошибка при обработке вашего запроса.\n"
+                "Пожалуйста, попробуйте позже или обратитесь к администратору."
+            )
+    except Exception as e:
+        logger.error(f"Error in error_handler: {e}")
+
+
+# ============================================================================
+# ОБРАБОТЧИК НЕИЗВЕСТНЫХ КОМАНД
+# ============================================================================
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает неизвестные команды.
+    """
+    await update.message.reply_text(
+        "❌ Неизвестная команда.\n"
+        "Используйте /help для просмотра доступных команд."
+    )
+
+
+# ============================================================================
+# НАСТРОЙКА КОМАНД БОТА
+# ============================================================================
+
+async def setup_commands(application: Application) -> None:
+    """
+    Настраивает список команд бота в меню Telegram.
+    """
+    commands = [
+        BotCommand("start", "Запуск бота"),
+        BotCommand("help", "Справка"),
+        BotCommand("arrival", "Приемка сырья"),
+        BotCommand("production", "Производство"),
+        BotCommand("packing", "Фасовка"),
+        BotCommand("shipment", "Отгрузка"),
+        BotCommand("stock", "Остатки"),
+        BotCommand("history", "История"),
+        BotCommand("admin", "Администрирование"),
+        BotCommand("cancel", "Отмена"),
+    ]
+    
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands configured")
+
+
+# ============================================================================
+# POST_INIT И POST_SHUTDOWN
+# ============================================================================
+
+async def post_init(application: Application) -> None:
+    """
+    Выполняется после инициализации бота.
+    """
+    logger.info("Bot started successfully")
+    await setup_commands(application)
+    
+    # Можно добавить уведомление администратору о запуске
+    # admin_id = settings.ADMIN_TELEGRAM_ID
+    # if admin_id:
+    #     await application.bot.send_message(
+    #         admin_id,
+    #         "✅ Бот запущен и готов к работе!"
+    #     )
+
+
+async def post_shutdown(application: Application) -> None:
+    """
+    Выполняется перед остановкой бота.
+    """
+    logger.info("Bot shutting down...")
+    
+    # Закрытие соединений с БД
+    if engine:
+        await engine.dispose()
+        logger.info("Database connections closed")
+
+
+# ============================================================================
+# ГЛАВНАЯ ФУНКЦИЯ
+# ============================================================================
+
+def main() -> None:
+    """
+    Главная функция запуска бота.
+    """
+    # Создание Application
+    application = (
+        Application.builder()
+        .token(settings.TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    
+    # Базовые команды
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CallbackQueryHandler(show_main_menu, pattern='^main_menu$'))
+    application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
+    
+    # Регистрация всех ConversationHandlers
+    # Группа 0 - Административные handlers (высокий приоритет)
+    application.add_handler(get_admin_warehouse_handler(), group=0)
+    application.add_handler(get_admin_users_handler(), group=0)
+    
+    # Группа 1 - Операционные handlers
+    application.add_handler(get_arrival_handler(), group=1)
+    application.add_handler(get_production_handler(), group=1)
+    application.add_handler(get_packing_handler(), group=1)
+    application.add_handler(get_shipment_handler(), group=1)
+    
+    # Группа 2 - Информационные handlers
+    application.add_handler(get_stock_handler(), group=2)
+    application.add_handler(get_history_handler(), group=2)
+    
+    # Обработчик неизвестных команд (последний)
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    
+    # Обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    # Запуск бота
+    logger.info("Starting bot polling...")
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
+
+
+if __name__ == '__main__':
     main()
