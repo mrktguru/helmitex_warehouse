@@ -1,5 +1,5 @@
 """
-Обработчик команд просмотра остатков и статистики складов.
+Обработчик команд просмотра остатков и статистики складов (aiogram 3.x).
 
 Этот модуль реализует функциональность для:
 - Просмотра остатков по складам и типам номенклатуры
@@ -8,16 +8,18 @@
 - Просмотра резервов и доступности
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from aiogram import Router, F
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from decimal import Decimal
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.database.models import User, SKUType
+from app.database.models import User, SKUType, InventoryReserve
 from app.services import (
     warehouse_service,
     stock_service,
@@ -27,62 +29,72 @@ from app.utils.keyboards import (
     get_warehouses_keyboard,
     get_main_menu_keyboard
 )
+from app.utils.logger import get_logger
+
+logger = get_logger("stock_handler")
+
+# Создаём роутер для stock handlers
+stock_router = Router(name="stock")
 
 
-# Состояния диалога
-(
-    SELECT_ACTION,
-    SELECT_WAREHOUSE,
-    SELECT_SKU_TYPE,
-    VIEW_DETAILS
-) = range(4)
+# ============================================================================
+# СОСТОЯНИЯ FSM
+# ============================================================================
+
+class StockStates(StatesGroup):
+    """Состояния диалога просмотра остатков."""
+    select_action = State()
+    select_warehouse = State()
+    select_sku_type = State()
 
 
 # ============================================================================
 # НАЧАЛО ДИАЛОГА ПРОСМОТРА ОСТАТКОВ
 # ============================================================================
 
-async def start_stock_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.message(Command("stock"))
+@stock_router.callback_query(F.data == "stock_view_start")
+async def start_stock_view(
+    update: Message | CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Начинает процесс просмотра остатков.
     
     Команда: /stock или кнопка "Остатки"
     """
-    query = update.callback_query
-    
-    # Подтверждение callback
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    # Определяем тип update
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+        user = update.from_user
+    else:
+        message = update
+        user = update.from_user
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Получение пользователя из БД
+    db_user = await session.get(User, user.id)
     
-    # Получение пользователя
-    user_id = update.effective_user.id
-    user = await session.get(User, user_id)
-    
-    if not user:
-        await message.reply_text(
+    if not db_user:
+        await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
-        return ConversationHandler.END
+        return
     
-    # Инициализация данных диалога
-    context.user_data['stock_view'] = {
-        'user_id': user_id,
-        'started_at': datetime.utcnow()
-    }
+    # Инициализация данных
+    await state.update_data(
+        user_id=user.id,
+        started_at=datetime.utcnow().isoformat()
+    )
     
     # Меню выбора действия
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 Остатки по складам", callback_data='stock_by_warehouse')],
-        [InlineKeyboardButton("🛢 Бочки с полуфабрикатами", callback_data='stock_barrels')],
-        [InlineKeyboardButton("📊 Общая статистика", callback_data='stock_overall')],
-        [InlineKeyboardButton("🔒 Резервы", callback_data='stock_reserves')],
-        [InlineKeyboardButton("❌ Отменить", callback_data='stock_cancel')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Остатки по складам", callback_data='stock_by_warehouse')],
+        [InlineKeyboardButton(text="🛢 Бочки с полуфабрикатами", callback_data='stock_barrels')],
+        [InlineKeyboardButton(text="📊 Общая статистика", callback_data='stock_overall')],
+        [InlineKeyboardButton(text="🔒 Резервы", callback_data='stock_reserves')],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data='stock_cancel')]
     ])
     
     text = (
@@ -90,39 +102,43 @@ async def start_stock_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Выберите действие:"
     )
     
-    await message.reply_text(
-        text,
-        reply_markup=keyboard,
-        parse_mode='HTML'
-    )
+    if isinstance(update, CallbackQuery):
+        await message.edit_text(text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
     
-    return SELECT_ACTION
+    await state.set_state(StockStates.select_action)
 
 
 # ============================================================================
 # ОСТАТКИ ПО СКЛАДАМ
 # ============================================================================
 
-async def view_by_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_action),
+    F.data == "stock_by_warehouse"
+)
+async def view_by_warehouse(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает список складов для просмотра остатков.
     """
-    query = update.callback_query
-    await query.answer()
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await callback.answer()
     
     try:
         # Получение списка складов
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await query.message.edit_text(
+            await callback.message.edit_text(
                 "❌ Нет доступных складов.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Клавиатура выбора склада
         keyboard = get_warehouses_keyboard(warehouses, callback_prefix='stock_wh')
@@ -132,49 +148,53 @@ async def view_by_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "Выберите склад:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_WAREHOUSE
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(StockStates.select_warehouse)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_by_warehouse: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
-async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_warehouse),
+    F.data.startswith("stock_wh_")
+)
+async def select_warehouse(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор склада и показывает меню типов номенклатуры.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID склада
-    warehouse_id = int(query.data.split('_')[-1])
-    context.user_data['stock_view']['warehouse_id'] = warehouse_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    warehouse_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка информации о складе
         warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        context.user_data['stock_view']['warehouse_name'] = warehouse.name
+        
+        # Сохранение выбора
+        await state.update_data(
+            warehouse_id=warehouse_id,
+            warehouse_name=warehouse.name
+        )
         
         # Меню выбора типа номенклатуры
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🌾 Сырье", callback_data='stock_type_raw')],
-            [InlineKeyboardButton("🛢 Полуфабрикаты", callback_data='stock_type_semi')],
-            [InlineKeyboardButton("📦 Готовая продукция", callback_data='stock_type_finished')],
-            [InlineKeyboardButton("📋 Все категории", callback_data='stock_type_all')],
-            [InlineKeyboardButton("🔙 Назад", callback_data='stock_by_warehouse')],
-            [InlineKeyboardButton("❌ Отменить", callback_data='stock_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌾 Сырье", callback_data='stock_type_raw')],
+            [InlineKeyboardButton(text="🛢 Полуфабрикаты", callback_data='stock_type_semi')],
+            [InlineKeyboardButton(text="📦 Готовая продукция", callback_data='stock_type_finished')],
+            [InlineKeyboardButton(text="📋 Все категории", callback_data='stock_type_all')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_by_warehouse')],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data='stock_cancel')]
         ])
         
         text = (
@@ -182,31 +202,34 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Выберите категорию номенклатуры:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_SKU_TYPE
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(StockStates.select_sku_type)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
-async def view_stock_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_sku_type),
+    F.data.startswith("stock_type_")
+)
+async def view_stock_by_type(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает остатки по выбранному типу номенклатуры.
     """
-    query = update.callback_query
-    await query.answer("⏳ Загрузка остатков...")
+    await callback.answer("⏳ Загрузка остатков...")
     
     # Определение типа номенклатуры
-    callback_data = query.data
+    callback_data = callback.data
     
     if callback_data == 'stock_type_raw':
         sku_type = SKUType.RAW
@@ -225,10 +248,8 @@ async def view_stock_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE)
         type_name = "Все категории"
         type_emoji = "📋"
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['stock_view']
+    # Получаем данные
+    data = await state.get_data()
     warehouse_id = data['warehouse_id']
     warehouse_name = data['warehouse_name']
     
@@ -253,18 +274,13 @@ async def view_stock_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "❌ Нет остатков в этой категории."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data=f'stock_wh_{warehouse_id}')],
-                [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data=f'stock_wh_{warehouse_id}')],
+                [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
             ])
             
-            await query.message.edit_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML'
-            )
-            
-            return SELECT_SKU_TYPE
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         
         # Группировка по типу SKU
         grouped_stocks = {}
@@ -324,103 +340,103 @@ async def view_stock_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(report) > 4000:
             report = report[:3900] + "\n\n<i>... список слишком длинный, показана часть</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=callback_data)],
-            [InlineKeyboardButton("🔙 Назад", callback_data=f'stock_wh_{warehouse_id}')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=callback_data)],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data=f'stock_wh_{warehouse_id}')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
         ])
         
-        await query.message.edit_text(
-            report,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_SKU_TYPE
+        await callback.message.edit_text(report, reply_markup=keyboard)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_stock_by_type: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке остатков: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР БОЧЕК
 # ============================================================================
 
-async def view_barrels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_action),
+    F.data == "stock_barrels"
+)
+async def view_barrels(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает список складов для просмотра бочек.
     """
-    query = update.callback_query
-    await query.answer()
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await callback.answer()
     
     try:
         # Получение списка складов
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await query.message.edit_text(
+            await callback.message.edit_text(
                 "❌ Нет доступных складов.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Клавиатура выбора склада
         keyboard_buttons = []
         for warehouse in warehouses:
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    warehouse.name,
+                    text=warehouse.name,
                     callback_data=f'stock_barrels_wh_{warehouse.id}'
                 )
             ])
         
         keyboard_buttons.append([
-            InlineKeyboardButton("🔙 Назад", callback_data='stock_start'),
-            InlineKeyboardButton("❌ Отменить", callback_data='stock_cancel')
+            InlineKeyboardButton(text="🔙 Назад", callback_data='stock_start'),
+            InlineKeyboardButton(text="❌ Отменить", callback_data='stock_cancel')
         ])
         
-        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         text = (
             "🛢 <b>Бочки с полуфабрикатами</b>\n\n"
             "Выберите склад:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_WAREHOUSE
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(StockStates.select_warehouse)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_barrels: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
-async def view_barrels_by_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_warehouse),
+    F.data.startswith("stock_barrels_wh_")
+)
+async def view_barrels_by_warehouse(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает список бочек на выбранном складе.
     """
-    query = update.callback_query
-    await query.answer("⏳ Загрузка бочек...")
+    await callback.answer("⏳ Загрузка бочек...")
     
     # Извлечение ID склада
-    warehouse_id = int(query.data.split('_')[-1])
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    warehouse_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка информации о складе
@@ -439,18 +455,13 @@ async def view_barrels_by_warehouse(update: Update, context: ContextTypes.DEFAUL
                 "❌ На складе нет бочек."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='stock_barrels')],
-                [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_barrels')],
+                [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
             ])
             
-            await query.message.edit_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML'
-            )
-            
-            return SELECT_WAREHOUSE
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         
         # Группировка по полуфабрикату
         barrels_by_sku = {}
@@ -509,52 +520,52 @@ async def view_barrels_by_warehouse(update: Update, context: ContextTypes.DEFAUL
         if len(report) > 4000:
             report = report[:3900] + "\n\n<i>... список слишком длинный, показана часть</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'stock_barrels_wh_{warehouse_id}')],
-            [InlineKeyboardButton("🔙 Назад", callback_data='stock_barrels')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'stock_barrels_wh_{warehouse_id}')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_barrels')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
         ])
         
-        await query.message.edit_text(
-            report,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_WAREHOUSE
+        await callback.message.edit_text(report, reply_markup=keyboard)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_barrels_by_warehouse: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке бочек: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ОБЩАЯ СТАТИСТИКА
 # ============================================================================
 
-async def view_overall_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_action),
+    F.data == "stock_overall"
+)
+async def view_overall_statistics(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает общую статистику по всем складам.
     """
-    query = update.callback_query
-    await query.answer("⏳ Подготовка статистики...")
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await callback.answer("⏳ Подготовка статистики...")
     
     try:
         # Получение всех складов
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await query.message.edit_text(
+            await callback.message.edit_text(
                 "❌ Нет доступных складов.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Сбор статистики
         total_stats = {
@@ -630,48 +641,43 @@ async def view_overall_statistics(update: Update, context: ContextTypes.DEFAULT_
             if wh['barrels'] > 0:
                 report += f"  Бочки: {wh['barrels']} ({wh['barrel_weight']} кг)\n"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data='stock_overall')],
-            [InlineKeyboardButton("🔙 Назад", callback_data='stock_start')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data='stock_overall')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_start')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
         ])
         
-        await query.message.edit_text(
-            report,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_ACTION
+        await callback.message.edit_text(report, reply_markup=keyboard)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_overall_statistics: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка при подготовке статистики: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР РЕЗЕРВОВ
 # ============================================================================
 
-async def view_reserves(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(
+    StateFilter(StockStates.select_action),
+    F.data == "stock_reserves"
+)
+async def view_reserves(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает активные резервы по всем складам.
     """
-    query = update.callback_query
-    await query.answer("⏳ Загрузка резервов...")
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await callback.answer("⏳ Загрузка резервов...")
     
     try:
         # Получение всех активных резервов
-        from app.database.models import InventoryReserve
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        
         stmt = select(InventoryReserve).options(
             selectinload(InventoryReserve.warehouse),
             selectinload(InventoryReserve.sku),
@@ -687,18 +693,13 @@ async def view_reserves(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 "✅ Нет активных резервов."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='stock_start')],
-                [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_start')],
+                [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
             ])
             
-            await query.message.edit_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML'
-            )
-            
-            return SELECT_ACTION
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         
         # Группировка по складам
         reserves_by_warehouse = {}
@@ -739,114 +740,60 @@ async def view_reserves(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         if len(report) > 4000:
             report = report[:3900] + "\n\n<i>... список слишком длинный, показана часть</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data='stock_reserves')],
-            [InlineKeyboardButton("🔙 Назад", callback_data='stock_start')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='stock_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data='stock_reserves')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_start')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
         ])
         
-        await query.message.edit_text(
-            report,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_ACTION
+        await callback.message.edit_text(report, reply_markup=keyboard)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in view_reserves: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке резервов: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВОЗВРАТ К НАЧАЛУ
 # ============================================================================
 
-async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(F.data == "stock_start")
+async def back_to_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Возвращает к начальному меню просмотра остатков.
     """
-    query = update.callback_query
-    await query.answer()
-    
-    return await start_stock_view(update, context)
+    await callback.answer()
+    await start_stock_view(callback, state, session)
 
 
 # ============================================================================
 # ОТМЕНА ДИАЛОГА
 # ============================================================================
 
-async def cancel_stock_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@stock_router.callback_query(F.data.in_(["stock_cancel", "cancel"]))
+@stock_router.message(Command("cancel"), StateFilter('*'))
+async def cancel_stock_view(update: Message | CallbackQuery, state: FSMContext) -> None:
     """
     Закрывает просмотр остатков.
     """
-    query = update.callback_query if update.callback_query else None
-    
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+    else:
+        message = update
     
-    # Очистка данных
-    context.user_data.pop('stock_view', None)
+    # Очистка состояния
+    await state.clear()
     
-    await message.reply_text(
+    await message.answer(
         "✅ Просмотр завершен.",
         reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-
-# ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
-# ============================================================================
-
-def get_stock_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для просмотра остатков.
-    
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('stock', start_stock_view),
-            CallbackQueryHandler(start_stock_view, pattern='^stock_view_start$')
-        ],
-        states={
-            SELECT_ACTION: [
-                CallbackQueryHandler(view_by_warehouse, pattern='^stock_by_warehouse$'),
-                CallbackQueryHandler(view_barrels, pattern='^stock_barrels$'),
-                CallbackQueryHandler(view_overall_statistics, pattern='^stock_overall$'),
-                CallbackQueryHandler(view_reserves, pattern='^stock_reserves$'),
-                CallbackQueryHandler(back_to_start, pattern='^stock_start$'),
-                CallbackQueryHandler(cancel_stock_view, pattern='^stock_cancel$')
-            ],
-            SELECT_WAREHOUSE: [
-                CallbackQueryHandler(select_warehouse, pattern='^stock_wh_\\d+$'),
-                CallbackQueryHandler(view_barrels_by_warehouse, pattern='^stock_barrels_wh_\\d+$'),
-                CallbackQueryHandler(view_by_warehouse, pattern='^stock_by_warehouse$'),
-                CallbackQueryHandler(view_barrels, pattern='^stock_barrels$'),
-                CallbackQueryHandler(back_to_start, pattern='^stock_start$'),
-                CallbackQueryHandler(cancel_stock_view, pattern='^stock_cancel$')
-            ],
-            SELECT_SKU_TYPE: [
-                CallbackQueryHandler(view_stock_by_type, pattern='^stock_type_'),
-                CallbackQueryHandler(select_warehouse, pattern='^stock_wh_\\d+$'),
-                CallbackQueryHandler(view_by_warehouse, pattern='^stock_by_warehouse$'),
-                CallbackQueryHandler(back_to_start, pattern='^stock_start$'),
-                CallbackQueryHandler(cancel_stock_view, pattern='^stock_cancel$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_stock_view),
-            CallbackQueryHandler(cancel_stock_view, pattern='^cancel$')
-        ],
-        name='stock_view_conversation',
-        persistent=False
     )
