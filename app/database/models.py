@@ -82,6 +82,21 @@ class ProductionStatus(str, enum.Enum):
     cancelled = "cancelled"  # Отменено
 
 
+class ShipmentStatus(str, enum.Enum):
+    """Статус отгрузки"""
+    pending = "pending"  # Ожидает
+    in_progress = "in_progress"  # В процессе
+    completed = "completed"  # Завершена
+    cancelled = "cancelled"  # Отменена
+
+
+class ReserveType(str, enum.Enum):
+    """Тип резервирования"""
+    shipment = "shipment"  # Резерв под отгрузку
+    production = "production"  # Резерв под производство
+    manual = "manual"  # Ручной резерв
+
+
 class WasteType(str, enum.Enum):
     """Тип отходов"""
     semifinished_defect = "semifinished_defect"  # Брак полуфабриката
@@ -542,6 +557,7 @@ class InventoryReserve(Base):
     sku_id = Column(Integer, ForeignKey("skus.id"), nullable=False, index=True)
     quantity = Column(Float, nullable=False)
     reserved_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    reserve_type = Column(Enum(ReserveType), default=ReserveType.manual, nullable=False, index=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=True, index=True)  # Срок резервирования
