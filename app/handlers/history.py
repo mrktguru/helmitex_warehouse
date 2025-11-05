@@ -8,16 +8,19 @@
 - Просмотра истории отгрузок
 - Просмотра истории отходов
 - Фильтрации по датам и типам операций
+
+Конвертировано на aiogram 3.x с использованием FSM (StatesGroup).
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Union
 
 from app.database.models import (
     User, Movement, ProductionBatch, Shipment, WasteRecord,
@@ -36,66 +39,74 @@ from app.utils.keyboards import (
 from app.validators.input_validators import parse_date_input
 
 
-# Состояния диалога
-(
-    SELECT_ACTION,
-    SELECT_PERIOD,
-    SELECT_WAREHOUSE,
-    VIEW_MOVEMENTS,
-    VIEW_PRODUCTION,
-    VIEW_PACKING,
-    VIEW_SHIPMENTS,
-    VIEW_WASTE
-) = range(8)
+# ============================================================================
+# FSM STATES
+# ============================================================================
+
+class HistoryStates(StatesGroup):
+    """Состояния FSM для просмотра истории операций."""
+    select_action = State()       # Выбор типа операции (движения, производство, фасовка, отгрузки, отходы)
+    select_period = State()       # Выбор периода (сегодня, вчера, неделя, месяц, всё)
+    select_warehouse = State()    # Выбор склада (все склады или конкретный)
+    view_movements = State()      # Просмотр движений товаров
+    view_production = State()     # Просмотр истории производства
+    view_packing = State()        # Просмотр истории фасовки
+    view_shipments = State()      # Просмотр истории отгрузок
+    view_waste = State()          # Просмотр истории отходов
+
+
+# ============================================================================
+# ROUTER
+# ============================================================================
+
+router = Router(name='history')
 
 
 # ============================================================================
 # НАЧАЛО ДИАЛОГА ИСТОРИИ
 # ============================================================================
 
-async def start_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(Command('history'))
+@router.callback_query(F.data == 'history_start')
+async def start_history(event: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession) -> None:
     """
     Начинает процесс просмотра истории операций.
     
     Команда: /history или кнопка "История"
     """
-    query = update.callback_query
-    
-    # Подтверждение callback
-    if query:
-        await query.answer()
-        message = query.message
+    # Определение типа события
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
+        user_id = event.from_user.id
     else:
-        message = update.message
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+        message = event
+        user_id = event.from_user.id
     
     # Получение пользователя
-    user_id = update.effective_user.id
     user = await session.get(User, user_id)
     
     if not user:
-        await message.reply_text(
+        await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
-        return ConversationHandler.END
+        return
     
     # Инициализация данных диалога
-    context.user_data['history'] = {
-        'user_id': user_id,
-        'started_at': datetime.utcnow(),
-        'period': 'today'  # По умолчанию сегодня
-    }
+    await state.update_data(
+        user_id=user_id,
+        started_at=datetime.utcnow().isoformat(),
+        period='today'  # По умолчанию сегодня
+    )
     
     # Меню выбора типа истории
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 Движения товаров", callback_data='hist_movements')],
-        [InlineKeyboardButton("🏭 История производства", callback_data='hist_production')],
-        [InlineKeyboardButton("📦 История фасовки", callback_data='hist_packing')],
-        [InlineKeyboardButton("🚚 История отгрузок", callback_data='hist_shipments')],
-        [InlineKeyboardButton("🗑 История отходов", callback_data='hist_waste')],
-        [InlineKeyboardButton("❌ Отменить", callback_data='hist_cancel')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Движения товаров", callback_data='hist_movements')],
+        [InlineKeyboardButton(text="🏭 История производства", callback_data='hist_production')],
+        [InlineKeyboardButton(text="📦 История фасовки", callback_data='hist_packing')],
+        [InlineKeyboardButton(text="🚚 История отгрузок", callback_data='hist_shipments')],
+        [InlineKeyboardButton(text="🗑 История отходов", callback_data='hist_waste')],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data='hist_cancel')]
     ])
     
     text = (
@@ -103,28 +114,32 @@ async def start_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "Выберите тип операций:"
     )
     
-    await message.reply_text(
-        text,
-        reply_markup=keyboard,
-        parse_mode='HTML'
-    )
+    if isinstance(event, CallbackQuery):
+        await message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    else:
+        await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
     
-    return SELECT_ACTION
+    await state.set_state(HistoryStates.select_action)
 
 
 # ============================================================================
 # ВЫБОР ПЕРИОДА
 # ============================================================================
 
-async def select_period_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, operation_type: str) -> int:
+@router.callback_query(HistoryStates.select_action, F.data.in_([
+    'hist_movements', 'hist_production', 'hist_packing', 'hist_shipments', 'hist_waste'
+]))
+async def select_period_menu(callback: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню выбора периода для просмотра истории.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
+    
+    # Определение типа операции
+    operation_type = callback.data.replace('hist_', '')
     
     # Сохранение типа операции
-    context.user_data['history']['operation_type'] = operation_type
+    await state.update_data(operation_type=operation_type)
     
     # Определение названия операции
     operation_names = {
@@ -138,14 +153,14 @@ async def select_period_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
     operation_name = operation_names.get(operation_type, 'операций')
     
     # Меню выбора периода
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Сегодня", callback_data='hist_period_today')],
-        [InlineKeyboardButton("📅 Вчера", callback_data='hist_period_yesterday')],
-        [InlineKeyboardButton("📅 Последние 7 дней", callback_data='hist_period_week')],
-        [InlineKeyboardButton("📅 Последние 30 дней", callback_data='hist_period_month')],
-        [InlineKeyboardButton("📅 Весь период", callback_data='hist_period_all')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='hist_start')],
-        [InlineKeyboardButton("❌ Отменить", callback_data='hist_cancel')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Сегодня", callback_data='hist_period_today')],
+        [InlineKeyboardButton(text="📅 Вчера", callback_data='hist_period_yesterday')],
+        [InlineKeyboardButton(text="📅 Последние 7 дней", callback_data='hist_period_week')],
+        [InlineKeyboardButton(text="📅 Последние 30 дней", callback_data='hist_period_month')],
+        [InlineKeyboardButton(text="📅 Весь период", callback_data='hist_period_all')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='hist_start')],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data='hist_cancel')]
     ])
     
     text = (
@@ -153,43 +168,37 @@ async def select_period_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
         "Выберите период:"
     )
     
-    await query.message.edit_text(
-        text,
-        reply_markup=keyboard,
-        parse_mode='HTML'
-    )
-    
-    return SELECT_PERIOD
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await state.set_state(HistoryStates.select_period)
 
 
 # ============================================================================
 # ОБРАБОТКА ВЫБОРА ПЕРИОДА
 # ============================================================================
 
-async def select_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(HistoryStates.select_period, F.data.startswith('hist_period_'))
+async def select_period(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает выбор периода и переходит к выбору склада.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Определение периода
-    callback_data = query.data
     today = date.today()
     
-    if callback_data == 'hist_period_today':
+    if callback.data == 'hist_period_today':
         start_date = today
         end_date = today
         period_name = "Сегодня"
-    elif callback_data == 'hist_period_yesterday':
+    elif callback.data == 'hist_period_yesterday':
         start_date = today - timedelta(days=1)
         end_date = today - timedelta(days=1)
         period_name = "Вчера"
-    elif callback_data == 'hist_period_week':
+    elif callback.data == 'hist_period_week':
         start_date = today - timedelta(days=7)
         end_date = today
         period_name = "Последние 7 дней"
-    elif callback_data == 'hist_period_month':
+    elif callback.data == 'hist_period_month':
         start_date = today - timedelta(days=30)
         end_date = today
         period_name = "Последние 30 дней"
@@ -198,132 +207,127 @@ async def select_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         end_date = None
         period_name = "Весь период"
     
-    # Сохранение периода
-    context.user_data['history']['start_date'] = start_date
-    context.user_data['history']['end_date'] = end_date
-    context.user_data['history']['period_name'] = period_name
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Сохранение периода (конвертация date в ISO строку для FSM)
+    await state.update_data(
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        period_name=period_name
+    )
     
     try:
         # Получение списка складов
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await query.message.edit_text(
+            await callback.message.edit_text(
                 "❌ Нет доступных складов.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Клавиатура выбора склада (+ опция "Все склады")
         keyboard_buttons = []
         
         keyboard_buttons.append([
-            InlineKeyboardButton("🏭 Все склады", callback_data='hist_wh_all')
+            InlineKeyboardButton(text="🏭 Все склады", callback_data='hist_wh_all')
         ])
         
         for warehouse in warehouses:
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    warehouse.name,
+                    text=warehouse.name,
                     callback_data=f'hist_wh_{warehouse.id}'
                 )
             ])
         
+        # Получаем operation_type из state для кнопки "Назад"
+        data = await state.get_data()
+        operation_type = data.get('operation_type', 'movements')
+        
         keyboard_buttons.append([
-            InlineKeyboardButton("🔙 Назад", callback_data=f'hist_{context.user_data["history"]["operation_type"]}'),
-            InlineKeyboardButton("❌ Отменить", callback_data='hist_cancel')
+            InlineKeyboardButton(text="🔙 Назад", callback_data=f'hist_{operation_type}'),
+            InlineKeyboardButton(text="❌ Отменить", callback_data='hist_cancel')
         ])
         
-        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         text = (
             f"📜 <b>Период:</b> {period_name}\n\n"
             "Выберите склад:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_WAREHOUSE
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.select_warehouse)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВЫБОР СКЛАДА И ПРОСМОТР ДАННЫХ
 # ============================================================================
 
-async def select_warehouse_and_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(HistoryStates.select_warehouse, F.data.startswith('hist_wh_'))
+async def select_warehouse_and_view(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает выбор склада и показывает данные.
     """
-    query = update.callback_query
-    await query.answer("⏳ Загрузка данных...")
+    await callback.answer("⏳ Загрузка данных...")
     
     # Извлечение ID склада
-    callback_data = query.data
-    
-    if callback_data == 'hist_wh_all':
+    if callback.data == 'hist_wh_all':
         warehouse_id = None
         warehouse_name = "Все склады"
     else:
-        warehouse_id = int(callback_data.split('_')[-1])
+        warehouse_id = int(callback.data.split('_')[-1])
         
         # Получение названия склада
-        session: AsyncSession = context.bot_data['db_session']
         warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
         warehouse_name = warehouse.name
     
     # Сохранение выбора
-    context.user_data['history']['warehouse_id'] = warehouse_id
-    context.user_data['history']['warehouse_name'] = warehouse_name
+    await state.update_data(
+        warehouse_id=warehouse_id,
+        warehouse_name=warehouse_name
+    )
+    
+    # Получение operation_type из state
+    data = await state.get_data()
+    operation_type = data.get('operation_type')
     
     # Перенаправление на нужный обработчик
-    operation_type = context.user_data['history']['operation_type']
-    
     if operation_type == 'movements':
-        return await view_movements(update, context)
+        await view_movements(callback, state, session)
     elif operation_type == 'production':
-        return await view_production(update, context)
+        await view_production(callback, state, session)
     elif operation_type == 'packing':
-        return await view_packing(update, context)
+        await view_packing(callback, state, session)
     elif operation_type == 'shipments':
-        return await view_shipments(update, context)
+        await view_shipments(callback, state, session)
     elif operation_type == 'waste':
-        return await view_waste(update, context)
+        await view_waste(callback, state, session)
     else:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             "❌ Неизвестный тип операции.",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР ДВИЖЕНИЙ
 # ============================================================================
 
-async def view_movements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_movements(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает историю движений товаров.
     """
-    query = update.callback_query
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['history']
+    data = await state.get_data()
     
     try:
         # Получение движений
@@ -342,11 +346,14 @@ async def view_movements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if data.get('warehouse_id'):
             filters.append(Movement.warehouse_id == data['warehouse_id'])
         
+        # Конвертация ISO строк обратно в date
         if data.get('start_date'):
-            filters.append(Movement.created_at >= datetime.combine(data['start_date'], datetime.min.time()))
+            start_date = date.fromisoformat(data['start_date'])
+            filters.append(Movement.created_at >= datetime.combine(start_date, datetime.min.time()))
         
         if data.get('end_date'):
-            filters.append(Movement.created_at <= datetime.combine(data['end_date'], datetime.max.time()))
+            end_date = date.fromisoformat(data['end_date'])
+            filters.append(Movement.created_at <= datetime.combine(end_date, datetime.max.time()))
         
         if filters:
             stmt = stmt.where(and_(*filters))
@@ -423,50 +430,44 @@ async def view_movements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>... список слишком длинный, показаны последние операции</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
-            [InlineKeyboardButton("🔙 Изменить период", callback_data='hist_movements')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='hist_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
+            [InlineKeyboardButton(text="🔙 Изменить период", callback_data='hist_movements')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return VIEW_MOVEMENTS
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.view_movements)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке движений: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР ИСТОРИИ ПРОИЗВОДСТВА
 # ============================================================================
 
-async def view_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_production(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает историю производственных партий.
     """
-    query = update.callback_query
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['history']
+    data = await state.get_data()
     
     try:
+        # Конвертация ISO строк обратно в date (если есть)
+        start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
+        end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
+        
         # Получение партий
         batches = await production_service.get_batches(
             session,
             warehouse_id=data.get('warehouse_id'),
-            start_date=data.get('start_date'),
-            end_date=data.get('end_date'),
+            start_date=start_date,
+            end_date=end_date,
             limit=50
         )
         
@@ -534,50 +535,44 @@ async def view_production(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>... список слишком длинный, показаны последние партии</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
-            [InlineKeyboardButton("🔙 Изменить период", callback_data='hist_production')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='hist_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
+            [InlineKeyboardButton(text="🔙 Изменить период", callback_data='hist_production')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return VIEW_PRODUCTION
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.view_production)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке истории производства: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР ИСТОРИИ ФАСОВКИ
 # ============================================================================
 
-async def view_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_packing(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает историю операций фасовки.
     """
-    query = update.callback_query
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['history']
+    data = await state.get_data()
     
     try:
+        # Конвертация ISO строк обратно в date (если есть)
+        start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
+        end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
+        
         # Получение истории фасовки
         packing_history = await packing_service.get_packing_history(
             session,
             warehouse_id=data.get('warehouse_id'),
-            start_date=data.get('start_date'),
-            end_date=data.get('end_date'),
+            start_date=start_date,
+            end_date=end_date,
             limit=50
         )
         
@@ -633,50 +628,44 @@ async def view_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>... список слишком длинный, показаны последние операции</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
-            [InlineKeyboardButton("🔙 Изменить период", callback_data='hist_packing')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='hist_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
+            [InlineKeyboardButton(text="🔙 Изменить период", callback_data='hist_packing')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return VIEW_PACKING
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.view_packing)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке истории фасовки: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР ИСТОРИИ ОТГРУЗОК
 # ============================================================================
 
-async def view_shipments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_shipments(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает историю отгрузок.
     """
-    query = update.callback_query
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['history']
+    data = await state.get_data()
     
     try:
+        # Конвертация ISO строк обратно в date (если есть)
+        start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
+        end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
+        
         # Получение отгрузок
         shipments = await shipment_service.get_shipments(
             session,
             warehouse_id=data.get('warehouse_id'),
-            start_date=data.get('start_date'),
-            end_date=data.get('end_date'),
+            start_date=start_date,
+            end_date=end_date,
             limit=50
         )
         
@@ -747,42 +736,32 @@ async def view_shipments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>... список слишком длинный, показаны последние отгрузки</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
-            [InlineKeyboardButton("🔙 Изменить период", callback_data='hist_shipments')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='hist_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
+            [InlineKeyboardButton(text="🔙 Изменить период", callback_data='hist_shipments')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return VIEW_SHIPMENTS
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.view_shipments)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке истории отгрузок: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ПРОСМОТР ИСТОРИИ ОТХОДОВ
 # ============================================================================
 
-async def view_waste(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def view_waste(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает историю отходов.
     """
-    query = update.callback_query
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['history']
+    data = await state.get_data()
     
     try:
         # Получение записей об отходах
@@ -800,11 +779,14 @@ async def view_waste(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if data.get('warehouse_id'):
             filters.append(WasteRecord.warehouse_id == data['warehouse_id'])
         
+        # Конвертация ISO строк обратно в date
         if data.get('start_date'):
-            filters.append(WasteRecord.created_at >= datetime.combine(data['start_date'], datetime.min.time()))
+            start_date = date.fromisoformat(data['start_date'])
+            filters.append(WasteRecord.created_at >= datetime.combine(start_date, datetime.min.time()))
         
         if data.get('end_date'):
-            filters.append(WasteRecord.created_at <= datetime.combine(data['end_date'], datetime.max.time()))
+            end_date = date.fromisoformat(data['end_date'])
+            filters.append(WasteRecord.created_at <= datetime.combine(end_date, datetime.max.time()))
         
         if filters:
             stmt = stmt.where(and_(*filters))
@@ -870,136 +852,56 @@ async def view_waste(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>... список слишком длинный, показаны последние записи</i>"
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
-            [InlineKeyboardButton("🔙 Изменить период", callback_data='hist_waste')],
-            [InlineKeyboardButton("❌ Закрыть", callback_data='hist_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'hist_wh_{data.get("warehouse_id") or "all"}')],
+            [InlineKeyboardButton(text="🔙 Изменить период", callback_data='hist_waste')],
+            [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return VIEW_WASTE
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(HistoryStates.view_waste)
         
     except Exception as e:
-        await query.message.edit_text(
+        await callback.message.edit_text(
             f"❌ Ошибка при загрузке истории отходов: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВОЗВРАТ К НАЧАЛУ
 # ============================================================================
 
-async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(F.data == 'hist_start')
+async def back_to_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Возвращает к начальному меню истории.
     """
-    query = update.callback_query
-    await query.answer()
-    
-    return await start_history(update, context)
+    await callback.answer()
+    await start_history(callback, state, session)
 
 
 # ============================================================================
 # ОТМЕНА ДИАЛОГА
 # ============================================================================
 
-async def cancel_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(F.data == 'hist_cancel')
+@router.message(Command('cancel'), StateFilter(HistoryStates))
+async def cancel_history(event: Union[Message, CallbackQuery], state: FSMContext) -> None:
     """
     Закрывает просмотр истории.
     """
-    query = update.callback_query if update.callback_query else None
-    
-    if query:
-        await query.answer()
-        message = query.message
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
     else:
-        message = update.message
+        message = event
     
-    # Очистка данных
-    context.user_data.pop('history', None)
+    # Очистка данных FSM
+    await state.clear()
     
-    await message.reply_text(
+    await message.answer(
         "✅ Просмотр истории завершен.",
         reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-
-# ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
-# ============================================================================
-
-def get_history_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для просмотра истории.
-    
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('history', start_history),
-            CallbackQueryHandler(start_history, pattern='^history_start$')
-        ],
-        states={
-            SELECT_ACTION: [
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'movements'), pattern='^hist_movements$'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'production'), pattern='^hist_production$'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'packing'), pattern='^hist_packing$'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'shipments'), pattern='^hist_shipments$'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'waste'), pattern='^hist_waste$'),
-                CallbackQueryHandler(back_to_start, pattern='^hist_start$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            SELECT_PERIOD: [
-                CallbackQueryHandler(select_period, pattern='^hist_period_'),
-                CallbackQueryHandler(back_to_start, pattern='^hist_start$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            SELECT_WAREHOUSE: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, c.user_data['history']['operation_type']), pattern='^hist_(movements|production|packing|shipments|waste)$'),
-                CallbackQueryHandler(back_to_start, pattern='^hist_start$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            VIEW_MOVEMENTS: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'movements'), pattern='^hist_movements$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            VIEW_PRODUCTION: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'production'), pattern='^hist_production$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            VIEW_PACKING: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'packing'), pattern='^hist_packing$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            VIEW_SHIPMENTS: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'shipments'), pattern='^hist_shipments$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ],
-            VIEW_WASTE: [
-                CallbackQueryHandler(select_warehouse_and_view, pattern='^hist_wh_'),
-                CallbackQueryHandler(lambda u, c: select_period_menu(u, c, 'waste'), pattern='^hist_waste$'),
-                CallbackQueryHandler(cancel_history, pattern='^hist_cancel$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_history),
-            CallbackQueryHandler(cancel_history, pattern='^cancel$')
-        ],
-        name='history_conversation',
-        persistent=False
     )
