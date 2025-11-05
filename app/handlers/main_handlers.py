@@ -178,3 +178,5 @@ async def history_menu_callback(callback: CallbackQuery):
         "📈 <b>История операций</b>\n\nВыберите тип операций:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
     )
+    
+__all__ = ['router']
