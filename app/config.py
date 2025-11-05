@@ -104,6 +104,11 @@ class Settings(BaseSettings):
         default="INFO",
         description="Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
+
+    LOG_DIR: str = Field(
+    default="logs",
+    description="Директория для хранения файлов логов"
+    )
     
     APP_ENV: str = Field(
         default="production",
