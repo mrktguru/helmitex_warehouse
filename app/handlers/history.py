@@ -1033,3 +1033,7 @@ async def cancel_history(event: Union[Message, CallbackQuery], state: FSMContext
         "✅ Просмотр истории завершен.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+
+__all__ = ['router']
