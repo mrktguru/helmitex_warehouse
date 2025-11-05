@@ -797,3 +797,6 @@ async def cancel_stock_view(update: Message | CallbackQuery, state: FSMContext) 
         "✅ Просмотр завершен.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+__all__ = ['stock_router']
