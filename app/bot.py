@@ -398,28 +398,28 @@ def register_handlers(dp) -> None:
     
     # 3. Основные бизнес-процессы
     try:
-        from app.handlers.arrival import router as arrival_router
+        from app.handlers.arrival import arrival_router
         dp.include_router(arrival_router)
         logger.info("✅ Arrival router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import arrival router: {e}")
     
     try:
-        from app.handlers.production import router as production_router
+        from app.handlers.production import production_router
         dp.include_router(production_router)
         logger.info("✅ Production router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import production router: {e}")
     
     try:
-        from app.handlers.packing import router as packing_router
+        from app.handlers.packing import packing_router
         dp.include_router(packing_router)
         logger.info("✅ Packing router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import packing router: {e}")
     
     try:
-        from app.handlers.shipment import router as shipment_router
+        from app.handlers.shipment import shipment_router
         dp.include_router(shipment_router)
         logger.info("✅ Shipment router registered")
     except ImportError as e:
@@ -427,7 +427,7 @@ def register_handlers(dp) -> None:
     
     # 4. Просмотр данных
     try:
-        from app.handlers.stock import router as stock_router
+        from app.handlers.stock import stock_router
         dp.include_router(stock_router)
         logger.info("✅ Stock router registered")
     except ImportError as e:
@@ -442,7 +442,7 @@ def register_handlers(dp) -> None:
     
     # 5. Дополнительные handlers (если есть)
     try:
-        from app.handlers.main_handlers import router as main_handlers_router
+        from app.handlers.main_handlers import main_handlers_router
         dp.include_router(main_handlers_router)
         logger.info("✅ Main handlers router registered")
     except ImportError as e:
