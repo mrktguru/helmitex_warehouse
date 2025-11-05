@@ -6,16 +6,19 @@
 - Управления номенклатурой (SKU всех типов)
 - Управления технологическими картами (рецептами)
 - Управления вариантами упаковки
+
+Конвертировано на aiogram 3.x с использованием FSM (StatesGroup).
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Union
 
 from app.database.models import User, SKUType, WasteType
 from app.services import (
@@ -41,101 +44,120 @@ from app.validators.input_validators import (
 )
 
 
-# Состояния диалога
-(
-    ADMIN_MENU,
+# ============================================================================
+# FSM СОСТОЯНИЯ
+# ============================================================================
+
+class AdminWarehouseStates(StatesGroup):
+    """Состояния FSM для административной панели складов."""
+    # Главное меню
+    admin_menu = State()
+    
     # Управление складами
-    WAREHOUSE_MENU,
-    CREATE_WAREHOUSE_NAME,
-    CREATE_WAREHOUSE_ADDRESS,
-    CREATE_WAREHOUSE_DESC,
-    CONFIRM_CREATE_WAREHOUSE,
-    SELECT_WAREHOUSE_EDIT,
-    EDIT_WAREHOUSE_MENU,
+    warehouse_menu = State()
+    create_warehouse_name = State()
+    create_warehouse_address = State()
+    create_warehouse_desc = State()
+    confirm_create_warehouse = State()
+    select_warehouse_edit = State()
+    edit_warehouse_menu = State()
+    
     # Управление SKU
-    SKU_MENU,
-    SELECT_SKU_TYPE_CREATE,
-    CREATE_SKU_NAME,
-    CREATE_SKU_UNIT,
-    CREATE_SKU_DESC,
-    CONFIRM_CREATE_SKU,
-    SELECT_SKU_TYPE_LIST,
-    SELECT_SKU_EDIT,
-    EDIT_SKU_MENU,
+    sku_menu = State()
+    select_sku_type_create = State()
+    create_sku_name = State()
+    create_sku_unit = State()
+    create_sku_desc = State()
+    confirm_create_sku = State()
+    select_sku_type_list = State()
+    select_sku_edit = State()
+    edit_sku_menu = State()
+    
     # Управление рецептами
-    RECIPE_MENU,
-    CREATE_RECIPE_NAME,
-    CREATE_RECIPE_SEMI_SKU,
-    CREATE_RECIPE_OUTPUT,
-    CREATE_RECIPE_BATCH_SIZE,
-    CREATE_RECIPE_DESC,
-    ADD_COMPONENT_SELECT_RAW,
-    ADD_COMPONENT_PERCENTAGE,
-    REVIEW_RECIPE_COMPONENTS,
-    CONFIRM_CREATE_RECIPE,
-    SELECT_RECIPE_EDIT,
+    recipe_menu = State()
+    create_recipe_name = State()
+    create_recipe_semi_sku = State()
+    create_recipe_output = State()
+    create_recipe_batch_size = State()
+    create_recipe_desc = State()
+    add_component_select_raw = State()
+    add_component_percentage = State()
+    review_recipe_components = State()
+    confirm_create_recipe = State()
+    select_recipe_edit = State()
+    
     # Управление вариантами упаковки
-    PACKING_VARIANT_MENU,
-    CREATE_VARIANT_SEMI,
-    CREATE_VARIANT_FINISHED,
-    CREATE_VARIANT_WEIGHT,
-    CONFIRM_CREATE_VARIANT
-) = range(34)
+    packing_variant_menu = State()
+    create_variant_semi = State()
+    create_variant_finished = State()
+    create_variant_weight = State()
+    confirm_create_variant = State()
+
+
+# ============================================================================
+# РОУТЕР
+# ============================================================================
+
+router = Router(name='admin_warehouse')
 
 
 # ============================================================================
 # ГЛАВНОЕ АДМИНИСТРАТИВНОЕ МЕНЮ
 # ============================================================================
 
-async def start_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(Command('admin'))
+@router.callback_query(F.data == 'admin_start')
+async def start_admin(
+    event: Union[Message, CallbackQuery],
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Начинает административную сессию.
     
     Команда: /admin
     """
-    query = update.callback_query
-    
-    # Подтверждение callback
-    if query:
-        await query.answer()
-        message = query.message
+    # Определение типа события
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
+        user_id = event.from_user.id
     else:
-        message = update.message
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+        message = event
+        user_id = event.from_user.id
     
     # Получение пользователя
-    user_id = update.effective_user.id
     user = await session.get(User, user_id)
     
     if not user:
-        await message.reply_text(
+        await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
-        return ConversationHandler.END
+        await state.clear()
+        return
     
     # Проверка административных прав
     if not user.is_admin:
-        await message.reply_text(
+        await message.answer(
             "❌ У вас нет административных прав.\n"
             "Обратитесь к администратору системы."
         )
-        return ConversationHandler.END
+        await state.clear()
+        return
     
     # Инициализация данных
-    context.user_data['admin'] = {
-        'user_id': user_id,
-        'started_at': datetime.utcnow()
-    }
+    await state.update_data(
+        user_id=user_id,
+        started_at=datetime.utcnow().isoformat()
+    )
     
     # Главное меню
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏭 Склады", callback_data='admin_warehouses')],
-        [InlineKeyboardButton("📋 Номенклатура (SKU)", callback_data='admin_sku')],
-        [InlineKeyboardButton("🧪 Технологические карты", callback_data='admin_recipes')],
-        [InlineKeyboardButton("📦 Варианты упаковки", callback_data='admin_packing_variants')],
-        [InlineKeyboardButton("❌ Выход", callback_data='admin_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏭 Склады", callback_data='admin_warehouses')],
+        [InlineKeyboardButton(text="📋 Номенклатура (SKU)", callback_data='admin_sku')],
+        [InlineKeyboardButton(text="🧪 Технологические карты", callback_data='admin_recipes')],
+        [InlineKeyboardButton(text="📦 Варианты упаковки", callback_data='admin_packing_variants')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='admin_exit')]
     ])
     
     text = (
@@ -143,30 +165,30 @@ async def start_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         "Выберите раздел для управления:"
     )
     
-    if query:
-        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    if isinstance(event, CallbackQuery):
+        await message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
     else:
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
     
-    return ADMIN_MENU
+    await state.set_state(AdminWarehouseStates.admin_menu)
 
 
 # ============================================================================
 # УПРАВЛЕНИЕ СКЛАДАМИ
 # ============================================================================
 
-async def warehouse_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.admin_menu, F.data == 'admin_warehouses')
+async def warehouse_menu(query: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню управления складами.
     """
-    query = update.callback_query
     await query.answer()
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Создать склад", callback_data='wh_create')],
-        [InlineKeyboardButton("📋 Список складов", callback_data='wh_list')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_start')],
-        [InlineKeyboardButton("❌ Выход", callback_data='admin_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать склад", callback_data='wh_create')],
+        [InlineKeyboardButton(text="📋 Список складов", callback_data='wh_list')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_start')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='admin_exit')]
     ])
     
     text = (
@@ -175,19 +197,18 @@ async def warehouse_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return WAREHOUSE_MENU
+    await state.set_state(AdminWarehouseStates.warehouse_menu)
 
 
-async def create_warehouse_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.warehouse_menu, F.data == 'wh_create')
+async def create_warehouse_start(query: CallbackQuery, state: FSMContext) -> None:
     """
     Начинает процесс создания склада.
     """
-    query = update.callback_query
     await query.answer()
     
     # Инициализация данных склада
-    context.user_data['admin']['warehouse'] = {}
+    await state.update_data(warehouse={})
     
     text = (
         "➕ <b>Создание склада</b>\n\n"
@@ -201,29 +222,32 @@ async def create_warehouse_start(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='HTML'
     )
     
-    return CREATE_WAREHOUSE_NAME
+    await state.set_state(AdminWarehouseStates.create_warehouse_name)
 
 
-async def create_warehouse_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_warehouse_name, F.text)
+async def create_warehouse_name(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод названия склада.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Валидация
     validation = validate_text_length(user_input, min_length=3, max_length=100)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_WAREHOUSE_NAME
+        return
     
     # Сохранение названия
-    context.user_data['admin']['warehouse']['name'] = user_input
+    data = await state.get_data()
+    warehouse = data.get('warehouse', {})
+    warehouse['name'] = user_input
+    await state.update_data(warehouse=warehouse)
     
     text = (
         f"✅ Название: <b>{user_input}</b>\n\n"
@@ -231,94 +255,104 @@ async def create_warehouse_name(update: Update, context: ContextTypes.DEFAULT_TY
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_WAREHOUSE_ADDRESS
+    await state.set_state(AdminWarehouseStates.create_warehouse_address)
 
 
-async def create_warehouse_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_warehouse_address, F.text)
+async def create_warehouse_address(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод адреса склада.
     """
-    message = update.message
     user_input = message.text.strip()
+    
+    # Получение текущих данных
+    data = await state.get_data()
+    warehouse = data.get('warehouse', {})
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['admin']['warehouse']['address'] = None
+        warehouse['address'] = None
     else:
         # Валидация
         validation = validate_text_length(user_input, max_length=200)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return CREATE_WAREHOUSE_ADDRESS
+            return
         
-        context.user_data['admin']['warehouse']['address'] = user_input
+        warehouse['address'] = user_input
+    
+    await state.update_data(warehouse=warehouse)
     
     text = (
         "📝 Введите описание склада (необязательно):\n\n"
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_WAREHOUSE_DESC
+    await state.set_state(AdminWarehouseStates.create_warehouse_desc)
 
 
-async def create_warehouse_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_warehouse_desc, F.text)
+async def create_warehouse_desc(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод описания и показывает подтверждение.
     """
-    message = update.message
     user_input = message.text.strip()
+    
+    # Получение текущих данных
+    data = await state.get_data()
+    warehouse = data.get('warehouse', {})
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['admin']['warehouse']['description'] = None
+        warehouse['description'] = None
     else:
         # Валидация
         validation = validate_text_length(user_input, max_length=500)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return CREATE_WAREHOUSE_DESC
+            return
         
-        context.user_data['admin']['warehouse']['description'] = user_input
+        warehouse['description'] = user_input
+    
+    await state.update_data(warehouse=warehouse)
     
     # Формирование сводки
-    data = context.user_data['admin']['warehouse']
-    
     summary = (
         "📋 <b>Подтверждение создания склада</b>\n\n"
-        f"🏭 <b>Название:</b> {data['name']}\n"
+        f"🏭 <b>Название:</b> {warehouse['name']}\n"
     )
     
-    if data.get('address'):
-        summary += f"📍 <b>Адрес:</b> {data['address']}\n"
+    if warehouse.get('address'):
+        summary += f"📍 <b>Адрес:</b> {warehouse['address']}\n"
     
-    if data.get('description'):
-        summary += f"📝 <b>Описание:</b> {data['description']}\n"
+    if warehouse.get('description'):
+        summary += f"📝 <b>Описание:</b> {warehouse['description']}\n"
     
     summary += "\n❓ Создать склад?"
     
-    await message.reply_text(
+    await message.answer(
         summary,
         reply_markup=get_confirmation_keyboard(
             confirm_callback='wh_confirm_create',
@@ -327,28 +361,26 @@ async def create_warehouse_desc(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='HTML'
     )
     
-    return CONFIRM_CREATE_WAREHOUSE
+    await state.set_state(AdminWarehouseStates.confirm_create_warehouse)
 
 
-async def confirm_create_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.confirm_create_warehouse, F.data == 'wh_confirm_create')
+async def confirm_create_warehouse(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Создает склад в базе данных.
     """
-    query = update.callback_query
     await query.answer("⏳ Создание склада...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['admin']['warehouse']
+    data = await state.get_data()
+    warehouse_data = data.get('warehouse', {})
     
     try:
         # Создание склада через сервис
         warehouse = await warehouse_service.create_warehouse(
             session=session,
-            name=data['name'],
-            address=data.get('address'),
-            description=data.get('description')
+            name=warehouse_data['name'],
+            address=warehouse_data.get('address'),
+            description=warehouse_data.get('description')
         )
         
         text = (
@@ -358,40 +390,35 @@ async def confirm_create_warehouse(update: Update, context: ContextTypes.DEFAULT
             f"📊 <b>Статус:</b> Активен"
         )
         
-        # Очистка данных
-        context.user_data['admin'].pop('warehouse', None)
+        # Очистка данных склада
+        await state.update_data(warehouse=None)
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Создать еще", callback_data='wh_create')],
-            [InlineKeyboardButton("🔙 К складам", callback_data='admin_warehouses')],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data='admin_start')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать еще", callback_data='wh_create')],
+            [InlineKeyboardButton(text="🔙 К складам", callback_data='admin_warehouses')],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data='admin_start')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return WAREHOUSE_MENU
+        await state.set_state(AdminWarehouseStates.warehouse_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ <b>Ошибка при создании склада:</b>\n\n{str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К складам", callback_data='admin_warehouses')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К складам", callback_data='admin_warehouses')]
             ]),
             parse_mode='HTML'
         )
-        
-        return WAREHOUSE_MENU
+        await state.set_state(AdminWarehouseStates.warehouse_menu)
 
 
-async def list_warehouses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.warehouse_menu, F.data == 'wh_list')
+async def list_warehouses(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает список всех складов.
     """
-    query = update.callback_query
     await query.answer("⏳ Загрузка складов...")
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
     
     try:
         # Получение всех складов
@@ -403,14 +430,12 @@ async def list_warehouses(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "❌ Нет созданных складов."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Создать склад", callback_data='wh_create')],
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_warehouses')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Создать склад", callback_data='wh_create')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_warehouses')]
             ])
         else:
-            text = (
-                f"📋 <b>Список складов ({len(warehouses)})</b>\n\n"
-            )
+            text = f"📋 <b>Список складов ({len(warehouses)})</b>\n\n"
             
             for wh in warehouses:
                 status = "✅ Активен" if wh.is_active else "🔒 Неактивен"
@@ -419,41 +444,40 @@ async def list_warehouses(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     text += f"   📍 {wh.address}\n"
                 text += f"   🆔 ID: {wh.id}\n\n"
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Редактировать склад", callback_data='wh_edit_select')],
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_warehouses')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Редактировать склад", callback_data='wh_edit_select')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_warehouses')]
             ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return WAREHOUSE_MENU
+        await state.set_state(AdminWarehouseStates.warehouse_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_warehouses')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_warehouses')]
             ])
         )
-        return WAREHOUSE_MENU
+        await state.set_state(AdminWarehouseStates.warehouse_menu)
 
 
 # ============================================================================
 # УПРАВЛЕНИЕ НОМЕНКЛАТУРОЙ (SKU)
 # ============================================================================
 
-async def sku_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.admin_menu, F.data == 'admin_sku')
+async def sku_menu(query: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню управления номенклатурой.
     """
-    query = update.callback_query
     await query.answer()
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Добавить SKU", callback_data='sku_create')],
-        [InlineKeyboardButton("📋 Список SKU", callback_data='sku_list')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_start')],
-        [InlineKeyboardButton("❌ Выход", callback_data='admin_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить SKU", callback_data='sku_create')],
+        [InlineKeyboardButton(text="📋 Список SKU", callback_data='sku_list')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_start')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='admin_exit')]
     ])
     
     text = (
@@ -462,26 +486,25 @@ async def sku_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return SKU_MENU
+    await state.set_state(AdminWarehouseStates.sku_menu)
 
 
-async def create_sku_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.sku_menu, F.data == 'sku_create')
+async def create_sku_select_type(query: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню выбора типа SKU.
     """
-    query = update.callback_query
     await query.answer()
     
     # Инициализация данных SKU
-    context.user_data['admin']['sku'] = {}
+    await state.update_data(sku={})
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌾 Сырье", callback_data='sku_type_raw')],
-        [InlineKeyboardButton("🛢 Полуфабрикат", callback_data='sku_type_semi')],
-        [InlineKeyboardButton("📦 Готовая продукция", callback_data='sku_type_finished')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_sku')],
-        [InlineKeyboardButton("❌ Отменить", callback_data='admin_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌾 Сырье", callback_data='sku_type_raw')],
+        [InlineKeyboardButton(text="🛢 Полуфабрикат", callback_data='sku_type_semi')],
+        [InlineKeyboardButton(text="📦 Готовая продукция", callback_data='sku_type_finished')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_sku')],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data='admin_exit')]
     ])
     
     text = (
@@ -490,25 +513,22 @@ async def create_sku_select_type(update: Update, context: ContextTypes.DEFAULT_T
     )
     
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return SELECT_SKU_TYPE_CREATE
+    await state.set_state(AdminWarehouseStates.select_sku_type_create)
 
 
-async def create_sku_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.select_sku_type_create, F.data.startswith('sku_type_'))
+async def create_sku_type_selected(query: CallbackQuery, state: FSMContext) -> None:
     """
     Обрабатывает выбор типа SKU и запрашивает название.
     """
-    query = update.callback_query
     await query.answer()
     
     # Определение типа
-    callback_data = query.data
-    
-    if callback_data == 'sku_type_raw':
+    if query.data == 'sku_type_raw':
         sku_type = SKUType.RAW
         type_name = "Сырье"
         type_emoji = "🌾"
-    elif callback_data == 'sku_type_semi':
+    elif query.data == 'sku_type_semi':
         sku_type = SKUType.SEMI_FINISHED
         type_name = "Полуфабрикат"
         type_emoji = "🛢"
@@ -518,9 +538,12 @@ async def create_sku_type_selected(update: Update, context: ContextTypes.DEFAULT
         type_emoji = "📦"
     
     # Сохранение типа
-    context.user_data['admin']['sku']['sku_type'] = sku_type
-    context.user_data['admin']['sku']['type_name'] = type_name
-    context.user_data['admin']['sku']['type_emoji'] = type_emoji
+    data = await state.get_data()
+    sku = data.get('sku', {})
+    sku['sku_type'] = sku_type.value  # Сохраняем value для FSM
+    sku['type_name'] = type_name
+    sku['type_emoji'] = type_emoji
+    await state.update_data(sku=sku)
     
     text = (
         f"{type_emoji} <b>Добавление: {type_name}</b>\n\n"
@@ -534,29 +557,32 @@ async def create_sku_type_selected(update: Update, context: ContextTypes.DEFAULT
         parse_mode='HTML'
     )
     
-    return CREATE_SKU_NAME
+    await state.set_state(AdminWarehouseStates.create_sku_name)
 
 
-async def create_sku_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_sku_name, F.text)
+async def create_sku_name(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод названия SKU.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Валидация
     validation = validate_text_length(user_input, min_length=3, max_length=100)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_SKU_NAME
+        return
     
     # Сохранение названия
-    context.user_data['admin']['sku']['name'] = user_input
+    data = await state.get_data()
+    sku = data.get('sku', {})
+    sku['name'] = user_input
+    await state.update_data(sku=sku)
     
     text = (
         f"✅ Название: <b>{user_input}</b>\n\n"
@@ -564,35 +590,38 @@ async def create_sku_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "<i>Примеры: кг, литр, шт, ведро, мешок</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_SKU_UNIT
+    await state.set_state(AdminWarehouseStates.create_sku_unit)
 
 
-async def create_sku_unit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_sku_unit, F.text)
+async def create_sku_unit(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод единицы измерения.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Валидация
     validation = validate_text_length(user_input, min_length=1, max_length=20)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_SKU_UNIT
+        return
     
     # Сохранение единицы
-    context.user_data['admin']['sku']['unit'] = user_input
+    data = await state.get_data()
+    sku = data.get('sku', {})
+    sku['unit'] = user_input
+    await state.update_data(sku=sku)
     
     text = (
         f"✅ Единица: <b>{user_input}</b>\n\n"
@@ -600,55 +629,59 @@ async def create_sku_unit(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_SKU_DESC
+    await state.set_state(AdminWarehouseStates.create_sku_desc)
 
 
-async def create_sku_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_sku_desc, F.text)
+async def create_sku_desc(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод описания и показывает подтверждение.
     """
-    message = update.message
     user_input = message.text.strip()
+    
+    # Получение текущих данных
+    data = await state.get_data()
+    sku = data.get('sku', {})
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['admin']['sku']['description'] = None
+        sku['description'] = None
     else:
         # Валидация
         validation = validate_text_length(user_input, max_length=500)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return CREATE_SKU_DESC
+            return
         
-        context.user_data['admin']['sku']['description'] = user_input
+        sku['description'] = user_input
+    
+    await state.update_data(sku=sku)
     
     # Формирование сводки
-    data = context.user_data['admin']['sku']
-    
     summary = (
         "📋 <b>Подтверждение создания SKU</b>\n\n"
-        f"{data['type_emoji']} <b>Тип:</b> {data['type_name']}\n"
-        f"📝 <b>Название:</b> {data['name']}\n"
-        f"📏 <b>Единица:</b> {data['unit']}\n"
+        f"{sku['type_emoji']} <b>Тип:</b> {sku['type_name']}\n"
+        f"📝 <b>Название:</b> {sku['name']}\n"
+        f"📏 <b>Единица:</b> {sku['unit']}\n"
     )
     
-    if data.get('description'):
-        summary += f"📝 <b>Описание:</b> {data['description']}\n"
+    if sku.get('description'):
+        summary += f"📝 <b>Описание:</b> {sku['description']}\n"
     
     summary += "\n❓ Создать SKU?"
     
-    await message.reply_text(
+    await message.answer(
         summary,
         reply_markup=get_confirmation_keyboard(
             confirm_callback='sku_confirm_create',
@@ -657,78 +690,77 @@ async def create_sku_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode='HTML'
     )
     
-    return CONFIRM_CREATE_SKU
+    await state.set_state(AdminWarehouseStates.confirm_create_sku)
 
 
-async def confirm_create_sku(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.confirm_create_sku, F.data == 'sku_confirm_create')
+async def confirm_create_sku(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Создает SKU в базе данных.
     """
-    query = update.callback_query
     await query.answer("⏳ Создание SKU...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['admin']['sku']
+    data = await state.get_data()
+    sku_data = data.get('sku', {})
     
     try:
+        # Восстановление Enum из value
+        sku_type = SKUType(sku_data['sku_type'])
+        
         # Создание SKU через сервис
         sku = await stock_service.create_sku(
             session=session,
-            name=data['name'],
-            sku_type=data['sku_type'],
-            unit=data['unit'],
-            description=data.get('description')
+            name=sku_data['name'],
+            sku_type=sku_type,
+            unit=sku_data['unit'],
+            description=sku_data.get('description')
         )
         
         text = (
             "✅ <b>SKU успешно создан!</b>\n\n"
             f"🆔 <b>ID:</b> {sku.id}\n"
-            f"{data['type_emoji']} <b>Тип:</b> {data['type_name']}\n"
+            f"{sku_data['type_emoji']} <b>Тип:</b> {sku_data['type_name']}\n"
             f"📝 <b>Название:</b> {sku.name}\n"
             f"📏 <b>Единица:</b> {sku.unit}\n"
             f"📊 <b>Статус:</b> Активен"
         )
         
-        # Очистка данных
-        context.user_data['admin'].pop('sku', None)
+        # Очистка данных SKU
+        await state.update_data(sku=None)
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Добавить еще", callback_data='sku_create')],
-            [InlineKeyboardButton("🔙 К номенклатуре", callback_data='admin_sku')],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data='admin_start')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить еще", callback_data='sku_create')],
+            [InlineKeyboardButton(text="🔙 К номенклатуре", callback_data='admin_sku')],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data='admin_start')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return SKU_MENU
+        await state.set_state(AdminWarehouseStates.sku_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ <b>Ошибка при создании SKU:</b>\n\n{str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К номенклатуре", callback_data='admin_sku')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К номенклатуре", callback_data='admin_sku')]
             ]),
             parse_mode='HTML'
         )
-        
-        return SKU_MENU
+        await state.set_state(AdminWarehouseStates.sku_menu)
 
 
-async def list_sku_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.sku_menu, F.data == 'sku_list')
+async def list_sku_select_type(query: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню выбора типа для просмотра списка SKU.
     """
-    query = update.callback_query
     await query.answer()
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌾 Сырье", callback_data='sku_list_raw')],
-        [InlineKeyboardButton("🛢 Полуфабрикаты", callback_data='sku_list_semi')],
-        [InlineKeyboardButton("📦 Готовая продукция", callback_data='sku_list_finished')],
-        [InlineKeyboardButton("📋 Все категории", callback_data='sku_list_all')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_sku')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌾 Сырье", callback_data='sku_list_raw')],
+        [InlineKeyboardButton(text="🛢 Полуфабрикаты", callback_data='sku_list_semi')],
+        [InlineKeyboardButton(text="📦 Готовая продукция", callback_data='sku_list_finished')],
+        [InlineKeyboardButton(text="📋 Все категории", callback_data='sku_list_all')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_sku')]
     ])
     
     text = (
@@ -737,29 +769,26 @@ async def list_sku_select_type(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return SELECT_SKU_TYPE_LIST
+    await state.set_state(AdminWarehouseStates.select_sku_type_list)
 
 
-async def list_sku_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.select_sku_type_list, F.data.startswith('sku_list_'))
+async def list_sku_by_type(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает список SKU по выбранному типу.
     """
-    query = update.callback_query
     await query.answer("⏳ Загрузка...")
     
     # Определение типа
-    callback_data = query.data
-    
-    if callback_data == 'sku_list_raw':
+    if query.data == 'sku_list_raw':
         sku_type = SKUType.RAW
         type_name = "Сырье"
         type_emoji = "🌾"
-    elif callback_data == 'sku_list_semi':
+    elif query.data == 'sku_list_semi':
         sku_type = SKUType.SEMI_FINISHED
         type_name = "Полуфабрикаты"
         type_emoji = "🛢"
-    elif callback_data == 'sku_list_finished':
+    elif query.data == 'sku_list_finished':
         sku_type = SKUType.FINISHED
         type_name = "Готовая продукция"
         type_emoji = "📦"
@@ -767,9 +796,6 @@ async def list_sku_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         sku_type = None
         type_name = "Вся номенклатура"
         type_emoji = "📋"
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
     
     try:
         # Получение SKU
@@ -788,9 +814,9 @@ async def list_sku_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "❌ Нет номенклатуры в этой категории."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Добавить SKU", callback_data='sku_create')],
-                [InlineKeyboardButton("🔙 Назад", callback_data='sku_list')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Добавить SKU", callback_data='sku_create')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='sku_list')]
             ])
         else:
             text = f"{type_emoji} <b>{type_name} ({len(skus)})</b>\n\n"
@@ -808,40 +834,37 @@ async def list_sku_by_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if len(text) > 4000:
                 text = text[:3900] + "\n\n<i>... список слишком длинный</i>"
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='sku_list')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='sku_list')]
             ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return SELECT_SKU_TYPE_LIST
+        await state.set_state(AdminWarehouseStates.select_sku_type_list)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_sku')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_sku')]
             ])
         )
-        return SKU_MENU
-
-
+        await state.set_state(AdminWarehouseStates.sku_menu)
 # ============================================================================
-# УПРАВЛЕНИЕ ТЕХНОЛОГИЧЕСКИМИ КАРТАМИ
+# УПРАВЛЕНИЕ ТЕХНОЛОГИЧЕСКИМИ КАРТАМИ (РЕЦЕПТАМИ)
 # ============================================================================
 
-async def recipe_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.admin_menu, F.data == 'admin_recipes')
+async def recipe_menu(query: CallbackQuery, state: FSMContext) -> None:
     """
     Показывает меню управления рецептами.
     """
-    query = update.callback_query
     await query.answer()
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Создать рецепт", callback_data='recipe_create')],
-        [InlineKeyboardButton("📋 Список рецептов", callback_data='recipe_list')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_start')],
-        [InlineKeyboardButton("❌ Выход", callback_data='admin_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать рецепт", callback_data='recipe_create')],
+        [InlineKeyboardButton(text="📋 Список рецептов", callback_data='recipe_list')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_start')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='admin_exit')]
     ])
     
     text = (
@@ -850,21 +873,18 @@ async def recipe_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return RECIPE_MENU
+    await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def create_recipe_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.recipe_menu, F.data == 'recipe_create')
+async def create_recipe_start(query: CallbackQuery, state: FSMContext) -> None:
     """
     Начинает процесс создания рецепта.
     """
-    query = update.callback_query
     await query.answer()
     
     # Инициализация данных рецепта
-    context.user_data['admin']['recipe'] = {
-        'components': []  # Список компонентов
-    }
+    await state.update_data(recipe={'components': []})
     
     text = (
         "➕ <b>Создание технологической карты</b>\n\n"
@@ -878,32 +898,32 @@ async def create_recipe_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode='HTML'
     )
     
-    return CREATE_RECIPE_NAME
+    await state.set_state(AdminWarehouseStates.create_recipe_name)
 
 
-async def create_recipe_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_recipe_name, F.text)
+async def create_recipe_name(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает ввод названия рецепта.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Валидация
     validation = validate_text_length(user_input, min_length=3, max_length=100)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_RECIPE_NAME
+        return
     
     # Сохранение названия
-    context.user_data['admin']['recipe']['name'] = user_input
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    recipe['name'] = user_input
+    await state.update_data(recipe=recipe)
     
     try:
         # Получение полуфабрикатов
@@ -914,14 +934,15 @@ async def create_recipe_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         
         if not semi_skus:
-            await message.reply_text(
+            await message.answer(
                 "❌ Нет полуфабрикатов в системе.\n"
                 "Сначала создайте полуфабрикат через меню 'Номенклатура'.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
                 ])
             )
-            return RECIPE_MENU
+            await state.set_state(AdminWarehouseStates.recipe_menu)
+            return
         
         # Клавиатура выбора полуфабриката
         keyboard = get_sku_keyboard(
@@ -935,39 +956,38 @@ async def create_recipe_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "🛢 Выберите полуфабрикат (результат производства):"
         )
         
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return CREATE_RECIPE_SEMI_SKU
+        await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.create_recipe_semi_sku)
         
     except Exception as e:
-        await message.reply_text(
+        await message.answer(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
             ])
         )
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def create_recipe_semi_sku(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.create_recipe_semi_sku, F.data.startswith('recipe_semi_'))
+async def create_recipe_semi_sku(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает выбор полуфабриката.
     """
-    query = update.callback_query
     await query.answer()
     
     # Извлечение ID полуфабриката
     semi_sku_id = int(query.data.split('_')[-1])
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
         # Загрузка информации о SKU
         sku = await stock_service.get_sku(session, semi_sku_id)
         
-        context.user_data['admin']['recipe']['semi_sku_id'] = semi_sku_id
-        context.user_data['admin']['recipe']['semi_sku_name'] = sku.name
+        data = await state.get_data()
+        recipe = data.get('recipe', {})
+        recipe['semi_sku_id'] = semi_sku_id
+        recipe['semi_sku_name'] = sku.name
+        await state.update_data(recipe=recipe)
         
         text = (
             f"✅ Полуфабрикат: <b>{sku.name}</b>\n\n"
@@ -982,47 +1002,50 @@ async def create_recipe_semi_sku(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode='HTML'
         )
         
-        return CREATE_RECIPE_OUTPUT
+        await state.set_state(AdminWarehouseStates.create_recipe_output)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
             ])
         )
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def create_recipe_output(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_recipe_output, F.text)
+async def create_recipe_output(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод процента выхода.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг числа
     output_percentage = parse_decimal_input(user_input)
     
     if output_percentage is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_RECIPE_OUTPUT
+        return
     
     # Валидация диапазона
     if output_percentage < 50 or output_percentage > 100:
-        await message.reply_text(
+        await message.answer(
             "❌ Процент выхода должен быть от 50 до 100.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_RECIPE_OUTPUT
+        return
     
-    # Сохранение процента
-    context.user_data['admin']['recipe']['output_percentage'] = output_percentage
+    # Сохранение процента (как строку для FSM)
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    recipe['output_percentage'] = str(output_percentage)
+    await state.update_data(recipe=recipe)
     
     text = (
         f"✅ Процент выхода: <b>{output_percentage}%</b>\n\n"
@@ -1031,46 +1054,49 @@ async def create_recipe_output(update: Update, context: ContextTypes.DEFAULT_TYP
         "<i>Примеры: 100, 500, 1000</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_RECIPE_BATCH_SIZE
+    await state.set_state(AdminWarehouseStates.create_recipe_batch_size)
 
 
-async def create_recipe_batch_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_recipe_batch_size, F.text)
+async def create_recipe_batch_size(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод размера замеса.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг числа
     batch_size = parse_decimal_input(user_input)
     
     if batch_size is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_RECIPE_BATCH_SIZE
+        return
     
     # Валидация положительности
     validation = validate_positive_decimal(batch_size, min_value=Decimal('1'))
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return CREATE_RECIPE_BATCH_SIZE
+        return
     
-    # Сохранение размера
-    context.user_data['admin']['recipe']['batch_size'] = batch_size
+    # Сохранение размера (как строку для FSM)
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    recipe['batch_size'] = str(batch_size)
+    await state.update_data(recipe=recipe)
     
     text = (
         f"✅ Размер замеса: <b>{batch_size} кг</b>\n\n"
@@ -1078,49 +1104,53 @@ async def create_recipe_batch_size(update: Update, context: ContextTypes.DEFAULT
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_cancel_keyboard(),
         parse_mode='HTML'
     )
     
-    return CREATE_RECIPE_DESC
+    await state.set_state(AdminWarehouseStates.create_recipe_desc)
 
 
-async def create_recipe_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.create_recipe_desc, F.text)
+async def create_recipe_desc(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает ввод описания и переходит к добавлению компонентов.
     """
-    message = update.message
     user_input = message.text.strip()
+    
+    # Получение текущих данных
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['admin']['recipe']['description'] = None
+        recipe['description'] = None
     else:
         # Валидация
         validation = validate_text_length(user_input, max_length=500)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return CREATE_RECIPE_DESC
+            return
         
-        context.user_data['admin']['recipe']['description'] = user_input
+        recipe['description'] = user_input
+    
+    await state.update_data(recipe=recipe)
     
     # Переход к добавлению компонентов
-    return await show_add_component_menu(update, context)
+    await show_add_component_menu(message, state, session)
 
 
-async def show_add_component_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def show_add_component_menu(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает меню добавления компонента сырья.
     """
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
         # Получение сырья
         raw_skus = await stock_service.get_skus_by_type(
@@ -1130,18 +1160,20 @@ async def show_add_component_menu(update: Update, context: ContextTypes.DEFAULT_
         )
         
         if not raw_skus:
-            message = update.message if update.message else update.callback_query.message
-            await message.reply_text(
+            await message.answer(
                 "❌ Нет сырья в системе.\n"
                 "Сначала создайте сырье через меню 'Номенклатура'.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
                 ])
             )
-            return RECIPE_MENU
+            await state.set_state(AdminWarehouseStates.recipe_menu)
+            return
         
         # Текущие компоненты
-        components = context.user_data['admin']['recipe']['components']
+        data = await state.get_data()
+        recipe = data.get('recipe', {})
+        components = recipe.get('components', [])
         
         components_text = ""
         total_percentage = Decimal('0')
@@ -1149,8 +1181,9 @@ async def show_add_component_menu(update: Update, context: ContextTypes.DEFAULT_
         if components:
             components_text = "\n<b>Добавленные компоненты:</b>\n"
             for i, comp in enumerate(components, 1):
-                components_text += f"  {i}. {comp['name']}: {comp['percentage']}%\n"
-                total_percentage += comp['percentage']
+                comp_percentage = Decimal(comp['percentage'])
+                components_text += f"  {i}. {comp['name']}: {comp_percentage}%\n"
+                total_percentage += comp_percentage
             components_text += f"\n<b>Итого:</b> {total_percentage}%\n"
             
             if total_percentage == 100:
@@ -1161,11 +1194,27 @@ async def show_add_component_menu(update: Update, context: ContextTypes.DEFAULT_
             components_text += "\n"
         
         # Клавиатура выбора сырья
-        keyboard = get_sku_keyboard(
-            raw_skus,
-            callback_prefix='recipe_comp',
-            show_stock=False
-        )
+        keyboard_buttons = []
+        
+        for sku in raw_skus:
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text=f"{sku.name} ({sku.unit})",
+                    callback_data=f'recipe_comp_{sku.id}'
+                )
+            ])
+        
+        # Кнопки управления
+        if components and total_percentage == 100:
+            keyboard_buttons.append([
+                InlineKeyboardButton(text="✅ Завершить добавление", callback_data='recipe_comp_done')
+            ])
+        
+        keyboard_buttons.append([
+            InlineKeyboardButton(text="🔙 Отменить", callback_data='recipe_cancel')
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         text = (
             "🌾 <b>Добавление компонентов</b>\n"
@@ -1173,63 +1222,62 @@ async def show_add_component_menu(update: Update, context: ContextTypes.DEFAULT_
             "Выберите сырье для добавления:"
         )
         
-        message = update.message if update.message else update.callback_query.message
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return ADD_COMPONENT_SELECT_RAW
+        await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.add_component_select_raw)
         
     except Exception as e:
-        message = update.message if update.message else update.callback_query.message
-        await message.reply_text(
+        await message.answer(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
             ])
         )
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def add_component_select_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.add_component_select_raw, F.data.startswith('recipe_comp_'))
+async def add_component_select_raw(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает выбор сырья для компонента.
     """
-    query = update.callback_query
     await query.answer()
+    
+    # Проверка на завершение
+    if query.data == 'recipe_comp_done':
+        await review_recipe_components(query, state, session)
+        return
     
     # Извлечение ID сырья
     raw_sku_id = int(query.data.split('_')[-1])
     
     # Проверка: не добавлено ли уже это сырье
-    components = context.user_data['admin']['recipe']['components']
-    if any(comp['raw_sku_id'] == raw_sku_id for comp in components):
-        await query.message.reply_text(
-            "⚠️ Это сырье уже добавлено в рецепт.\n"
-            "Выберите другое.",
-            reply_markup=get_cancel_keyboard()
-        )
-        return ADD_COMPONENT_SELECT_RAW
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    components = recipe.get('components', [])
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    if any(comp['raw_sku_id'] == raw_sku_id for comp in components):
+        await query.answer("⚠️ Это сырье уже добавлено!", show_alert=True)
+        return
     
     try:
         # Загрузка информации о сырье
         sku = await stock_service.get_sku(session, raw_sku_id)
         
-        context.user_data['admin']['recipe']['current_component'] = {
+        # Сохранение текущего компонента
+        await state.update_data(current_component={
             'raw_sku_id': raw_sku_id,
             'name': sku.name
-        }
+        })
         
         # Расчет оставшегося процента
-        total_percentage = sum(comp['percentage'] for comp in components)
+        total_percentage = sum(Decimal(comp['percentage']) for comp in components)
         remaining = 100 - total_percentage
         
         text = (
             f"✅ Сырье: <b>{sku.name}</b>\n\n"
-            f"📊 Осталось: <b>{remaining}%</b>\n\n"
-            "Введите процент этого компонента:\n\n"
-            f"<i>Максимум: {remaining}</i>"
+            f"📊 Осталось распределить: <b>{remaining}%</b>\n\n"
+            "Введите процент для этого компонента:\n\n"
+            "<i>Примеры: 25, 30.5, 45</i>"
         )
         
         await query.message.edit_text(
@@ -1238,254 +1286,246 @@ async def add_component_select_raw(update: Update, context: ContextTypes.DEFAULT
             parse_mode='HTML'
         )
         
-        return ADD_COMPONENT_PERCENTAGE
+        await state.set_state(AdminWarehouseStates.add_component_percentage)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
             ])
         )
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def add_component_percentage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminWarehouseStates.add_component_percentage, F.text)
+async def add_component_percentage(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
-    Обрабатывает ввод процента компонента.
+    Обрабатывает ввод процента для компонента.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг числа
     percentage = parse_decimal_input(user_input)
     
     if percentage is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ADD_COMPONENT_PERCENTAGE
+        return
     
     # Валидация диапазона
     if percentage <= 0 or percentage > 100:
-        await message.reply_text(
+        await message.answer(
             "❌ Процент должен быть от 0.01 до 100.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ADD_COMPONENT_PERCENTAGE
+        return
     
     # Проверка суммы
-    components = context.user_data['admin']['recipe']['components']
-    total_percentage = sum(comp['percentage'] for comp in components) + percentage
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    components = recipe.get('components', [])
     
-    if total_percentage > 100:
-        remaining = 100 - sum(comp['percentage'] for comp in components)
-        await message.reply_text(
-            f"❌ Сумма компонентов превысит 100%.\n"
-            f"Осталось: {remaining}%\n\n"
+    total_percentage = sum(Decimal(comp['percentage']) for comp in components)
+    
+    if total_percentage + percentage > 100:
+        remaining = 100 - total_percentage
+        await message.answer(
+            f"❌ Превышен лимит!\n\n"
+            f"Осталось распределить: <b>{remaining}%</b>\n"
+            f"Вы пытаетесь добавить: <b>{percentage}%</b>\n\n"
             "Попробуйте снова:",
-            reply_markup=get_cancel_keyboard()
+            reply_markup=get_cancel_keyboard(),
+            parse_mode='HTML'
         )
-        return ADD_COMPONENT_PERCENTAGE
+        return
     
     # Добавление компонента
-    current_component = context.user_data['admin']['recipe']['current_component']
-    current_component['percentage'] = percentage
+    current_component = data.get('current_component', {})
+    components.append({
+        'raw_sku_id': current_component['raw_sku_id'],
+        'name': current_component['name'],
+        'percentage': str(percentage)  # Сохраняем как строку для FSM
+    })
     
-    components.append(current_component)
+    recipe['components'] = components
+    await state.update_data(recipe=recipe, current_component=None)
     
-    # Очистка текущего компонента
-    context.user_data['admin']['recipe'].pop('current_component', None)
+    # Проверка завершенности
+    new_total = total_percentage + percentage
     
-    # Проверка: достигли ли 100%
-    if total_percentage == 100:
-        return await review_recipe_components(update, context)
-    else:
-        # Меню: добавить еще или завершить
-        remaining = 100 - total_percentage
-        
-        summary = (
-            "✅ <b>Компонент добавлен!</b>\n\n"
-            f"<b>Компоненты ({len(components)}):</b>\n"
+    if new_total == 100:
+        await message.answer(
+            f"✅ Компонент добавлен: <b>{current_component['name']}</b> - {percentage}%\n\n"
+            "✅ Сумма компонентов = 100%\n"
+            "Рецепт готов к созданию!"
         )
-        
-        for i, comp in enumerate(components, 1):
-            summary += f"  {i}. {comp['name']}: {comp['percentage']}%\n"
-        
-        summary += f"\n<b>Итого:</b> {total_percentage}%\n"
-        summary += f"<b>Осталось:</b> {remaining}%\n\n"
-        summary += "❓ Что дальше?"
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Добавить еще компонент", callback_data='recipe_add_more_comp')],
-            [InlineKeyboardButton("✅ Завершить (недостает до 100%)", callback_data='recipe_review_comp')],
-            [InlineKeyboardButton("❌ Отменить", callback_data='recipe_cancel')]
-        ])
-        
-        await message.reply_text(summary, reply_markup=keyboard, parse_mode='HTML')
-        
-        return REVIEW_RECIPE_COMPONENTS
+        await review_recipe_components_from_message(message, state, session)
+    else:
+        await message.answer(
+            f"✅ Компонент добавлен: <b>{current_component['name']}</b> - {percentage}%\n\n"
+            f"📊 Итого: {new_total}% (осталось: {100 - new_total}%)"
+        )
+        await show_add_component_menu(message, state, session)
 
 
-async def add_more_components(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def review_recipe_components(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
-    Продолжает добавление компонентов.
+    Показывает итоговую сводку рецепта для подтверждения (из callback).
     """
-    query = update.callback_query
     await query.answer()
     
-    return await show_add_component_menu(update, context)
-
-
-async def review_recipe_components(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Показывает финальную сводку рецепта для подтверждения.
-    """
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        message = query.message
-    else:
-        message = update.message
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
     
-    data = context.user_data['admin']['recipe']
-    components = data['components']
+    # Формирование сводки
+    summary = (
+        "📋 <b>Подтверждение создания рецепта</b>\n\n"
+        f"🧪 <b>Название:</b> {recipe['name']}\n"
+        f"🛢 <b>Полуфабрикат:</b> {recipe['semi_sku_name']}\n"
+        f"📊 <b>Выход:</b> {recipe['output_percentage']}%\n"
+        f"⚖️ <b>Размер замеса:</b> {recipe['batch_size']} кг\n"
+    )
     
-    # Проверка суммы компонентов
-    total_percentage = sum(comp['percentage'] for comp in components)
+    if recipe.get('description'):
+        summary += f"📝 <b>Описание:</b> {recipe['description']}\n"
     
-    if total_percentage != 100:
-        text = (
-            "⚠️ <b>Предупреждение!</b>\n\n"
-            f"Сумма компонентов: {total_percentage}%\n"
-            "Рекомендуется 100%.\n\n"
-            "Вы уверены, что хотите создать рецепт с неполной суммой?"
-        )
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Добавить компоненты", callback_data='recipe_add_more_comp')],
-            [InlineKeyboardButton("✅ Создать как есть", callback_data='recipe_confirm_create')],
-            [InlineKeyboardButton("❌ Отменить", callback_data='recipe_cancel')]
-        ])
-    else:
-        # Формирование финальной сводки
-        summary = (
-            "📋 <b>Подтверждение создания рецепта</b>\n\n"
-            f"📝 <b>Название:</b> {data['name']}\n"
-            f"🛢 <b>Полуфабрикат:</b> {data['semi_sku_name']}\n"
-            f"📊 <b>Выход:</b> {data['output_percentage']}%\n"
-            f"⚖️ <b>Размер замеса:</b> {data['batch_size']} кг\n\n"
-            f"<b>Компоненты ({len(components)}):</b>\n"
-        )
-        
-        for i, comp in enumerate(components, 1):
-            summary += f"  {i}. {comp['name']}: {comp['percentage']}%\n"
-        
-        summary += f"\n<b>Итого:</b> {total_percentage}% ✅\n"
-        
-        if data.get('description'):
-            summary += f"\n📝 <b>Описание:</b> {data['description']}\n"
-        
-        summary += "\n❓ Создать рецепт?"
-        
-        text = summary
-        keyboard = get_confirmation_keyboard(
+    summary += "\n<b>Компоненты:</b>\n"
+    
+    for i, comp in enumerate(recipe['components'], 1):
+        summary += f"  {i}. {comp['name']}: {comp['percentage']}%\n"
+    
+    total = sum(Decimal(comp['percentage']) for comp in recipe['components'])
+    summary += f"\n<b>Итого:</b> {total}%\n\n❓ Создать рецепт?"
+    
+    await query.message.edit_text(
+        summary,
+        reply_markup=get_confirmation_keyboard(
             confirm_callback='recipe_confirm_create',
             cancel_callback='recipe_cancel'
-        )
+        ),
+        parse_mode='HTML'
+    )
     
-    if update.callback_query:
-        await message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    else:
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return CONFIRM_CREATE_RECIPE
+    await state.set_state(AdminWarehouseStates.confirm_create_recipe)
 
 
-async def confirm_create_recipe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def review_recipe_components_from_message(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Показывает итоговую сводку рецепта для подтверждения (из message).
+    """
+    data = await state.get_data()
+    recipe = data.get('recipe', {})
+    
+    # Формирование сводки
+    summary = (
+        "📋 <b>Подтверждение создания рецепта</b>\n\n"
+        f"🧪 <b>Название:</b> {recipe['name']}\n"
+        f"🛢 <b>Полуфабрикат:</b> {recipe['semi_sku_name']}\n"
+        f"📊 <b>Выход:</b> {recipe['output_percentage']}%\n"
+        f"⚖️ <b>Размер замеса:</b> {recipe['batch_size']} кг\n"
+    )
+    
+    if recipe.get('description'):
+        summary += f"📝 <b>Описание:</b> {recipe['description']}\n"
+    
+    summary += "\n<b>Компоненты:</b>\n"
+    
+    for i, comp in enumerate(recipe['components'], 1):
+        summary += f"  {i}. {comp['name']}: {comp['percentage']}%\n"
+    
+    total = sum(Decimal(comp['percentage']) for comp in recipe['components'])
+    summary += f"\n<b>Итого:</b> {total}%\n\n❓ Создать рецепт?"
+    
+    await message.answer(
+        summary,
+        reply_markup=get_confirmation_keyboard(
+            confirm_callback='recipe_confirm_create',
+            cancel_callback='recipe_cancel'
+        ),
+        parse_mode='HTML'
+    )
+    
+    await state.set_state(AdminWarehouseStates.confirm_create_recipe)
+
+
+@router.callback_query(AdminWarehouseStates.confirm_create_recipe, F.data == 'recipe_confirm_create')
+async def confirm_create_recipe(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Создает рецепт в базе данных.
     """
-    query = update.callback_query
     await query.answer("⏳ Создание рецепта...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['admin']['recipe']
+    data = await state.get_data()
+    recipe_data = data.get('recipe', {})
     
     try:
+        # Подготовка компонентов (конвертация строк обратно в Decimal)
+        components = [
+            {
+                'raw_sku_id': comp['raw_sku_id'],
+                'percentage': Decimal(comp['percentage'])
+            }
+            for comp in recipe_data['components']
+        ]
+        
         # Создание рецепта через сервис
         recipe = await recipe_service.create_recipe(
             session=session,
-            name=data['name'],
-            semi_finished_sku_id=data['semi_sku_id'],
-            output_percentage=data['output_percentage'],
-            batch_size=data['batch_size'],
-            description=data.get('description')
+            name=recipe_data['name'],
+            semi_finished_sku_id=recipe_data['semi_sku_id'],
+            output_percentage=Decimal(recipe_data['output_percentage']),
+            batch_size=Decimal(recipe_data['batch_size']),
+            description=recipe_data.get('description'),
+            components=components
         )
-        
-        # Добавление компонентов
-        for component_data in data['components']:
-            await recipe_service.add_recipe_component(
-                session=session,
-                recipe_id=recipe.id,
-                raw_sku_id=component_data['raw_sku_id'],
-                percentage=component_data['percentage']
-            )
         
         text = (
             "✅ <b>Рецепт успешно создан!</b>\n\n"
             f"🆔 <b>ID:</b> {recipe.id}\n"
-            f"📝 <b>Название:</b> {recipe.name}\n"
-            f"🛢 <b>Полуфабрикат:</b> {data['semi_sku_name']}\n"
-            f"📊 <b>Выход:</b> {recipe.output_percentage}%\n"
-            f"⚖️ <b>Размер замеса:</b> {recipe.batch_size} кг\n"
-            f"🧪 <b>Компонентов:</b> {len(data['components'])}\n"
+            f"🧪 <b>Название:</b> {recipe.name}\n"
+            f"🛢 <b>Полуфабрикат:</b> {recipe_data['semi_sku_name']}\n"
+            f"📊 <b>Компонентов:</b> {len(components)}\n"
             f"📊 <b>Статус:</b> Активен"
         )
         
-        # Очистка данных
-        context.user_data['admin'].pop('recipe', None)
+        # Очистка данных рецепта
+        await state.update_data(recipe=None, current_component=None)
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Создать еще", callback_data='recipe_create')],
-            [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data='admin_start')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать еще", callback_data='recipe_create')],
+            [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data='admin_start')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ <b>Ошибка при создании рецепта:</b>\n\n{str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К рецептам", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К рецептам", callback_data='admin_recipes')]
             ]),
             parse_mode='HTML'
         )
-        
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 
 
-async def list_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.recipe_menu, F.data == 'recipe_list')
+async def list_recipes(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает список всех рецептов.
     """
-    query = update.callback_query
     await query.answer("⏳ Загрузка рецептов...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
-        # Получение рецептов
-        recipes = await recipe_service.get_recipes(session, active_only=False, limit=100)
+        # Получение всех рецептов
+        recipes = await recipe_service.get_recipes(session, active_only=False)
         
         if not recipes:
             text = (
@@ -1493,187 +1533,524 @@ async def list_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 "❌ Нет созданных рецептов."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Создать рецепт", callback_data='recipe_create')],
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_recipes')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Создать рецепт", callback_data='recipe_create')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_recipes')]
             ])
         else:
             text = f"📋 <b>Список рецептов ({len(recipes)})</b>\n\n"
             
             for recipe in recipes:
-                status = "✅" if recipe.is_active else "🔒"
-                text += f"{status} <b>{recipe.name}</b>\n"
-                text += f"   🛢 Результат: {recipe.semi_finished_sku.name}\n"
+                status = "✅ Активен" if recipe.is_active else "🔒 Неактивен"
+                text += f"🧪 <b>{recipe.name}</b> - {status}\n"
+                text += f"   🛢 Полуфабрикат: {recipe.semi_finished_sku.name}\n"
                 text += f"   📊 Выход: {recipe.output_percentage}%\n"
                 text += f"   ⚖️ Замес: {recipe.batch_size} кг\n"
-                text += f"   🧪 Компонентов: {len(recipe.components)}\n"
+                text += f"   🌾 Компонентов: {len(recipe.components)}\n"
                 text += f"   🆔 ID: {recipe.id}\n\n"
             
             # Разбивка если слишком длинное
             if len(text) > 4000:
                 text = text[:3900] + "\n\n<i>... список слишком длинный</i>"
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_recipes')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_recipes')]
             ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return RECIPE_MENU
+        await state.set_state(AdminWarehouseStates.recipe_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='admin_recipes')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_recipes')]
             ])
         )
-        return RECIPE_MENU
-
-
+        await state.set_state(AdminWarehouseStates.recipe_menu)
 # ============================================================================
-# ОТМЕНА И ВЫХОД
+# УПРАВЛЕНИЕ ВАРИАНТАМИ УПАКОВКИ
 # ============================================================================
 
-async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminWarehouseStates.admin_menu, F.data == 'admin_packing_variants')
+async def packing_variant_menu(query: CallbackQuery, state: FSMContext) -> None:
     """
-    Отменяет административную операцию.
+    Показывает меню управления вариантами упаковки.
     """
-    query = update.callback_query if update.callback_query else None
+    await query.answer()
     
-    if query:
-        await query.answer()
-        message = query.message
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать вариант", callback_data='pv_create')],
+        [InlineKeyboardButton(text="📋 Список вариантов", callback_data='pv_list')],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_start')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='admin_exit')]
+    ])
+    
+    text = (
+        "📦 <b>Варианты упаковки</b>\n\n"
+        "Управление связями полуфабрикат → готовая продукция\n\n"
+        "Выберите действие:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+@router.callback_query(AdminWarehouseStates.packing_variant_menu, F.data == 'pv_create')
+async def create_variant_start(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Начинает процесс создания варианта упаковки.
+    """
+    await query.answer()
+    
+    # Инициализация данных варианта
+    await state.update_data(packing_variant={})
+    
+    try:
+        # Получение полуфабрикатов
+        semi_skus = await stock_service.get_skus_by_type(
+            session,
+            sku_type=SKUType.SEMI_FINISHED,
+            active_only=True
+        )
+        
+        if not semi_skus:
+            await query.message.edit_text(
+                "❌ Нет полуфабрикатов в системе.\n"
+                "Сначала создайте полуфабрикат через меню 'Номенклатура'.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+                ])
+            )
+            await state.set_state(AdminWarehouseStates.packing_variant_menu)
+            return
+        
+        # Клавиатура выбора полуфабриката
+        keyboard = get_sku_keyboard(
+            semi_skus,
+            callback_prefix='pv_semi',
+            show_stock=False
+        )
+        
+        text = (
+            "➕ <b>Создание варианта упаковки</b>\n\n"
+            "🛢 Выберите полуфабрикат:"
+        )
+        
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.create_variant_semi)
+        
+    except Exception as e:
+        await query.message.edit_text(
+            f"❌ Ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+            ])
+        )
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+@router.callback_query(AdminWarehouseStates.create_variant_semi, F.data.startswith('pv_semi_'))
+async def create_variant_semi(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Обрабатывает выбор полуфабриката.
+    """
+    await query.answer()
+    
+    # Извлечение ID полуфабриката
+    semi_sku_id = int(query.data.split('_')[-1])
+    
+    try:
+        # Загрузка информации о полуфабрикате
+        semi_sku = await stock_service.get_sku(session, semi_sku_id)
+        
+        # Сохранение
+        data = await state.get_data()
+        packing_variant = data.get('packing_variant', {})
+        packing_variant['semi_sku_id'] = semi_sku_id
+        packing_variant['semi_sku_name'] = semi_sku.name
+        await state.update_data(packing_variant=packing_variant)
+        
+        # Получение готовой продукции
+        finished_skus = await stock_service.get_skus_by_type(
+            session,
+            sku_type=SKUType.FINISHED,
+            active_only=True
+        )
+        
+        if not finished_skus:
+            await query.message.edit_text(
+                "❌ Нет готовой продукции в системе.\n"
+                "Сначала создайте готовую продукцию через меню 'Номенклатура'.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+                ])
+            )
+            await state.set_state(AdminWarehouseStates.packing_variant_menu)
+            return
+        
+        # Клавиатура выбора готовой продукции
+        keyboard = get_sku_keyboard(
+            finished_skus,
+            callback_prefix='pv_finished',
+            show_stock=False
+        )
+        
+        text = (
+            f"✅ Полуфабрикат: <b>{semi_sku.name}</b>\n\n"
+            "📦 Выберите готовую продукцию:"
+        )
+        
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.create_variant_finished)
+        
+    except Exception as e:
+        await query.message.edit_text(
+            f"❌ Ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+            ])
+        )
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+@router.callback_query(AdminWarehouseStates.create_variant_finished, F.data.startswith('pv_finished_'))
+async def create_variant_finished(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Обрабатывает выбор готовой продукции.
+    """
+    await query.answer()
+    
+    # Извлечение ID готовой продукции
+    finished_sku_id = int(query.data.split('_')[-1])
+    
+    try:
+        # Загрузка информации о готовой продукции
+        finished_sku = await stock_service.get_sku(session, finished_sku_id)
+        
+        # Сохранение
+        data = await state.get_data()
+        packing_variant = data.get('packing_variant', {})
+        packing_variant['finished_sku_id'] = finished_sku_id
+        packing_variant['finished_sku_name'] = finished_sku.name
+        packing_variant['finished_sku_unit'] = finished_sku.unit
+        await state.update_data(packing_variant=packing_variant)
+        
+        text = (
+            f"✅ Полуфабрикат: <b>{packing_variant['semi_sku_name']}</b>\n"
+            f"✅ Готовая продукция: <b>{finished_sku.name}</b>\n\n"
+            f"⚖️ Введите вес/объем одной единицы ({finished_sku.unit}):\n\n"
+            "<i>Например: 10 (для ведра 10 кг)</i>\n"
+            "<i>Или: 0.5 (для баночки 500г)</i>"
+        )
+        
+        await query.message.edit_text(
+            text,
+            reply_markup=get_cancel_keyboard(),
+            parse_mode='HTML'
+        )
+        
+        await state.set_state(AdminWarehouseStates.create_variant_weight)
+        
+    except Exception as e:
+        await query.message.edit_text(
+            f"❌ Ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+            ])
+        )
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+@router.message(AdminWarehouseStates.create_variant_weight, F.text)
+async def create_variant_weight(message: Message, state: FSMContext) -> None:
+    """
+    Обрабатывает ввод веса/объема единицы.
+    """
+    user_input = message.text.strip()
+    
+    # Парсинг числа
+    weight = parse_decimal_input(user_input)
+    
+    if weight is None:
+        await message.answer(
+            "❌ Некорректный формат числа.\n\n"
+            "Попробуйте снова:",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+    
+    # Валидация положительности
+    validation = validate_positive_decimal(weight, min_value=Decimal('0.001'))
+    
+    if not validation['valid']:
+        await message.answer(
+            f"❌ {validation['error']}\n\n"
+            "Попробуйте снова:",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+    
+    # Сохранение веса
+    data = await state.get_data()
+    packing_variant = data.get('packing_variant', {})
+    packing_variant['weight_per_unit'] = str(weight)  # Сохраняем как строку для FSM
+    await state.update_data(packing_variant=packing_variant)
+    
+    # Формирование сводки
+    summary = (
+        "📋 <b>Подтверждение создания варианта упаковки</b>\n\n"
+        f"🛢 <b>Полуфабрикат:</b> {packing_variant['semi_sku_name']}\n"
+        f"📦 <b>Готовая продукция:</b> {packing_variant['finished_sku_name']}\n"
+        f"⚖️ <b>Вес единицы:</b> {weight} {packing_variant['finished_sku_unit']}\n\n"
+        "❓ Создать вариант упаковки?"
+    )
+    
+    await message.answer(
+        summary,
+        reply_markup=get_confirmation_keyboard(
+            confirm_callback='pv_confirm_create',
+            cancel_callback='pv_cancel'
+        ),
+        parse_mode='HTML'
+    )
+    
+    await state.set_state(AdminWarehouseStates.confirm_create_variant)
+
+
+@router.callback_query(AdminWarehouseStates.confirm_create_variant, F.data == 'pv_confirm_create')
+async def confirm_create_variant(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Создает вариант упаковки в базе данных.
+    """
+    await query.answer("⏳ Создание варианта упаковки...")
+    
+    data = await state.get_data()
+    variant_data = data.get('packing_variant', {})
+    
+    try:
+        # Создание варианта упаковки через сервис
+        variant = await packing_service.create_packing_variant(
+            session=session,
+            semi_finished_sku_id=variant_data['semi_sku_id'],
+            finished_sku_id=variant_data['finished_sku_id'],
+            weight_per_unit=Decimal(variant_data['weight_per_unit'])
+        )
+        
+        text = (
+            "✅ <b>Вариант упаковки успешно создан!</b>\n\n"
+            f"🆔 <b>ID:</b> {variant.id}\n"
+            f"🛢 <b>Полуфабрикат:</b> {variant_data['semi_sku_name']}\n"
+            f"📦 <b>Готовая продукция:</b> {variant_data['finished_sku_name']}\n"
+            f"⚖️ <b>Вес единицы:</b> {variant_data['weight_per_unit']} {variant_data['finished_sku_unit']}\n"
+            f"📊 <b>Статус:</b> Активен"
+        )
+        
+        # Очистка данных варианта
+        await state.update_data(packing_variant=None)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать еще", callback_data='pv_create')],
+            [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data='admin_start')]
+        ])
+        
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+        
+    except Exception as e:
+        await query.message.edit_text(
+            f"❌ <b>Ошибка при создании варианта:</b>\n\n{str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К вариантам", callback_data='admin_packing_variants')]
+            ]),
+            parse_mode='HTML'
+        )
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+@router.callback_query(AdminWarehouseStates.packing_variant_menu, F.data == 'pv_list')
+async def list_packing_variants(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Показывает список всех вариантов упаковки.
+    """
+    await query.answer("⏳ Загрузка вариантов...")
+    
+    try:
+        # Получение всех вариантов упаковки
+        variants = await packing_service.get_packing_variants(session, active_only=False)
+        
+        if not variants:
+            text = (
+                "📋 <b>Список вариантов упаковки</b>\n\n"
+                "❌ Нет созданных вариантов."
+            )
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Создать вариант", callback_data='pv_create')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_packing_variants')]
+            ])
+        else:
+            text = f"📋 <b>Список вариантов упаковки ({len(variants)})</b>\n\n"
+            
+            for variant in variants:
+                status = "✅ Активен" if variant.is_active else "🔒 Неактивен"
+                text += f"📦 <b>{variant.finished_sku.name}</b> - {status}\n"
+                text += f"   🛢 Из: {variant.semi_finished_sku.name}\n"
+                text += f"   ⚖️ Вес: {variant.weight_per_unit} {variant.finished_sku.unit}\n"
+                text += f"   🆔 ID: {variant.id}\n\n"
+            
+            # Разбивка если слишком длинное
+            if len(text) > 4000:
+                text = text[:3900] + "\n\n<i>... список слишком длинный</i>"
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_packing_variants')]
+            ])
+        
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+        
+    except Exception as e:
+        await query.message.edit_text(
+            f"❌ Ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='admin_packing_variants')]
+            ])
+        )
+        await state.set_state(AdminWarehouseStates.packing_variant_menu)
+
+
+# ============================================================================
+# НАВИГАЦИЯ И ВОЗВРАТ
+# ============================================================================
+
+@router.callback_query(F.data == 'wh_cancel')
+async def cancel_warehouse_creation(query: CallbackQuery, state: FSMContext) -> None:
+    """Отмена создания склада."""
+    await query.answer()
+    await state.update_data(warehouse=None)
+    await warehouse_menu(query, state)
+
+
+@router.callback_query(F.data == 'sku_cancel')
+async def cancel_sku_creation(query: CallbackQuery, state: FSMContext) -> None:
+    """Отмена создания SKU."""
+    await query.answer()
+    await state.update_data(sku=None)
+    await sku_menu(query, state)
+
+
+@router.callback_query(F.data == 'recipe_cancel')
+async def cancel_recipe_creation(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Отмена создания рецепта."""
+    await query.answer()
+    await state.update_data(recipe=None, current_component=None)
+    await recipe_menu(query, state)
+
+
+@router.callback_query(F.data == 'pv_cancel')
+async def cancel_packing_variant_creation(query: CallbackQuery, state: FSMContext) -> None:
+    """Отмена создания варианта упаковки."""
+    await query.answer()
+    await state.update_data(packing_variant=None)
+    await packing_variant_menu(query, state)
+
+
+# ============================================================================
+# ОБРАБОТЧИКИ ВОЗВРАТА ИЗ ПОДМЕНЮ В ГЛАВНОЕ МЕНЮ
+# ============================================================================
+
+@router.callback_query(AdminWarehouseStates.warehouse_menu, F.data == 'admin_start')
+async def back_to_admin_from_warehouse(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возврат из меню складов в главное админ-меню."""
+    await start_admin(query, state, session)
+
+
+@router.callback_query(AdminWarehouseStates.sku_menu, F.data == 'admin_start')
+async def back_to_admin_from_sku(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возврат из меню SKU в главное админ-меню."""
+    await start_admin(query, state, session)
+
+
+@router.callback_query(AdminWarehouseStates.recipe_menu, F.data == 'admin_start')
+async def back_to_admin_from_recipe(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возврат из меню рецептов в главное админ-меню."""
+    await start_admin(query, state, session)
+
+
+@router.callback_query(AdminWarehouseStates.packing_variant_menu, F.data == 'admin_start')
+async def back_to_admin_from_packing(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возврат из меню вариантов упаковки в главное админ-меню."""
+    await start_admin(query, state, session)
+
+
+@router.callback_query(AdminWarehouseStates.select_sku_type_list, F.data == 'admin_sku')
+async def back_to_sku_menu_from_list(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат из списка SKU в меню SKU."""
+    await sku_menu(query, state)
+
+
+# ============================================================================
+# ВЫХОД ИЗ АДМИНИСТРАТИВНОЙ ПАНЕЛИ
+# ============================================================================
+
+@router.callback_query(F.data == 'admin_exit')
+@router.message(Command('cancel'), StateFilter(AdminWarehouseStates))
+async def exit_admin(event: Union[Message, CallbackQuery], state: FSMContext) -> None:
+    """
+    Завершает административную сессию.
+    """
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
     else:
-        message = update.message
+        message = event
     
-    # Очистка данных
-    context.user_data.pop('admin', None)
+    # Очистка всех данных FSM
+    await state.clear()
     
-    await message.reply_text(
-        "✅ Административная сессия завершена.",
-        reply_markup=get_main_menu_keyboard()
+    text = (
+        "✅ <b>Административная сессия завершена</b>\n\n"
+        "Используйте /admin для повторного входа."
     )
     
-    return ConversationHandler.END
+    if isinstance(event, CallbackQuery):
+        await message.edit_text(text, parse_mode='HTML')
+    else:
+        await message.answer(text, reply_markup=get_main_menu_keyboard(), parse_mode='HTML')
 
 
 # ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
+# ОБРАБОТЧИКИ ДЛЯ ОТМЕНЫ ИЗ ЛЮБОГО СОСТОЯНИЯ
 # ============================================================================
 
-def get_admin_warehouse_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для административной панели.
+@router.callback_query(StateFilter(AdminWarehouseStates), F.data == 'cancel')
+async def cancel_from_any_state(query: CallbackQuery, state: FSMContext) -> None:
+    """Отмена из любого состояния административной панели."""
+    await query.answer()
     
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('admin', start_admin),
-            CallbackQueryHandler(start_admin, pattern='^admin_panel_start$')
-        ],
-        states={
-            ADMIN_MENU: [
-                CallbackQueryHandler(warehouse_menu, pattern='^admin_warehouses$'),
-                CallbackQueryHandler(sku_menu, pattern='^admin_sku$'),
-                CallbackQueryHandler(recipe_menu, pattern='^admin_recipes$'),
-                CallbackQueryHandler(start_admin, pattern='^admin_start$'),
-                CallbackQueryHandler(cancel_admin, pattern='^admin_exit$')
-            ],
-            # Склады
-            WAREHOUSE_MENU: [
-                CallbackQueryHandler(create_warehouse_start, pattern='^wh_create$'),
-                CallbackQueryHandler(list_warehouses, pattern='^wh_list$'),
-                CallbackQueryHandler(start_admin, pattern='^admin_start$'),
-                CallbackQueryHandler(cancel_admin, pattern='^admin_exit$')
-            ],
-            CREATE_WAREHOUSE_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_warehouse_name)
-            ],
-            CREATE_WAREHOUSE_ADDRESS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_warehouse_address)
-            ],
-            CREATE_WAREHOUSE_DESC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_warehouse_desc)
-            ],
-            CONFIRM_CREATE_WAREHOUSE: [
-                CallbackQueryHandler(confirm_create_warehouse, pattern='^wh_confirm_create$'),
-                CallbackQueryHandler(warehouse_menu, pattern='^wh_cancel$')
-            ],
-            # SKU
-            SKU_MENU: [
-                CallbackQueryHandler(create_sku_select_type, pattern='^sku_create$'),
-                CallbackQueryHandler(list_sku_select_type, pattern='^sku_list$'),
-                CallbackQueryHandler(start_admin, pattern='^admin_start$'),
-                CallbackQueryHandler(cancel_admin, pattern='^admin_exit$')
-            ],
-            SELECT_SKU_TYPE_CREATE: [
-                CallbackQueryHandler(create_sku_type_selected, pattern='^sku_type_'),
-                CallbackQueryHandler(sku_menu, pattern='^admin_sku$'),
-                CallbackQueryHandler(cancel_admin, pattern='^admin_exit$')
-            ],
-            CREATE_SKU_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_sku_name)
-            ],
-            CREATE_SKU_UNIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_sku_unit)
-            ],
-            CREATE_SKU_DESC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_sku_desc)
-            ],
-            CONFIRM_CREATE_SKU: [
-                CallbackQueryHandler(confirm_create_sku, pattern='^sku_confirm_create$'),
-                CallbackQueryHandler(sku_menu, pattern='^sku_cancel$')
-            ],
-            SELECT_SKU_TYPE_LIST: [
-                CallbackQueryHandler(list_sku_by_type, pattern='^sku_list_'),
-                CallbackQueryHandler(sku_menu, pattern='^admin_sku$')
-            ],
-            # Рецепты
-            RECIPE_MENU: [
-                CallbackQueryHandler(create_recipe_start, pattern='^recipe_create$'),
-                CallbackQueryHandler(list_recipes, pattern='^recipe_list$'),
-                CallbackQueryHandler(start_admin, pattern='^admin_start$'),
-                CallbackQueryHandler(cancel_admin, pattern='^admin_exit$')
-            ],
-            CREATE_RECIPE_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_recipe_name)
-            ],
-            CREATE_RECIPE_SEMI_SKU: [
-                CallbackQueryHandler(create_recipe_semi_sku, pattern='^recipe_semi_\\d+$')
-            ],
-            CREATE_RECIPE_OUTPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_recipe_output)
-            ],
-            CREATE_RECIPE_BATCH_SIZE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_recipe_batch_size)
-            ],
-            CREATE_RECIPE_DESC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, create_recipe_desc)
-            ],
-            ADD_COMPONENT_SELECT_RAW: [
-                CallbackQueryHandler(add_component_select_raw, pattern='^recipe_comp_\\d+$')
-            ],
-            ADD_COMPONENT_PERCENTAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_component_percentage)
-            ],
-            REVIEW_RECIPE_COMPONENTS: [
-                CallbackQueryHandler(add_more_components, pattern='^recipe_add_more_comp$'),
-                CallbackQueryHandler(review_recipe_components, pattern='^recipe_review_comp$'),
-                CallbackQueryHandler(recipe_menu, pattern='^recipe_cancel$')
-            ],
-            CONFIRM_CREATE_RECIPE: [
-                CallbackQueryHandler(confirm_create_recipe, pattern='^recipe_confirm_create$'),
-                CallbackQueryHandler(add_more_components, pattern='^recipe_add_more_comp$'),
-                CallbackQueryHandler(recipe_menu, pattern='^recipe_cancel$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_admin),
-            CallbackQueryHandler(cancel_admin, pattern='^cancel$')
-        ],
-        name='admin_warehouse_conversation',
-        persistent=False
+    current_state = await state.get_state()
+    
+    # Очистка временных данных
+    await state.update_data(
+        warehouse=None,
+        sku=None,
+        recipe=None,
+        current_component=None,
+        packing_variant=None
     )
+    
+    # Определение куда вернуться в зависимости от текущего состояния
+    if current_state and 'warehouse' in current_state:
+        await warehouse_menu(query, state)
+    elif current_state and 'sku' in current_state:
+        await sku_menu(query, state)
+    elif current_state and 'recipe' in current_state:
+        await recipe_menu(query, state)
+    elif current_state and 'packing_variant' in current_state:
+        await packing_variant_menu(query, state)
+    else:
+        # По умолчанию - главное меню
+        session = None  # Нужно получить session через middleware
+        await start_admin(query, state, session)
