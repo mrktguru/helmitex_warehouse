@@ -1,5 +1,5 @@
 """
-Обработчик команд фасовки готовой продукции.
+Обработчик команд фасовки готовой продукции (aiogram 3.x).
 
 Этот модуль реализует диалоговые сценарии для:
 - Выбора полуфабриката из бочек для фасовки
@@ -9,12 +9,12 @@
 - Учета брака тары и технологических потерь
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
-from decimal import Decimal, InvalidOperation
+from aiogram import Router, F
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from decimal import Decimal
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,79 +39,89 @@ from app.validators.input_validators import (
     parse_decimal_input,
     parse_integer_input
 )
+from app.utils.logger import get_logger
+
+logger = get_logger("packing_handler")
+
+# Создаём роутер для packing handlers
+packing_router = Router(name="packing")
 
 
-# Состояния диалога
-(
-    SELECT_WAREHOUSE,
-    SELECT_SEMI_SKU,
-    SELECT_PACKING_VARIANT,
-    ENTER_UNITS_COUNT,
-    REVIEW_CALCULATION,
-    CONFIRM_PACKING,
-    ENTER_WASTE_CONTAINER,
-    ENTER_NOTES,
-    CONFIRM_EXECUTION
-) = range(9)
+# ============================================================================
+# СОСТОЯНИЯ FSM
+# ============================================================================
+
+class PackingStates(StatesGroup):
+    """Состояния диалога фасовки."""
+    select_warehouse = State()
+    select_semi_sku = State()
+    select_packing_variant = State()
+    enter_units_count = State()
+    review_calculation = State()
+    enter_waste_container = State()
+    enter_notes = State()
+    confirm_execution = State()
 
 
 # ============================================================================
 # НАЧАЛО ДИАЛОГА ФАСОВКИ
 # ============================================================================
 
-async def start_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.message(Command("packing"))
+@packing_router.callback_query(F.data == "packing_start")
+async def start_packing(
+    update: Message | CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Начинает процесс фасовки готовой продукции.
     
     Команда: /packing или кнопка "Фасовка"
     """
-    query = update.callback_query
-    
-    # Подтверждение callback
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    # Определяем тип update
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+        user = update.from_user
+    else:
+        message = update
+        user = update.from_user
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Получение пользователя из БД
+    db_user = await session.get(User, user.id)
     
-    # Получение пользователя
-    user_id = update.effective_user.id
-    user = await session.get(User, user_id)
-    
-    if not user:
-        await message.reply_text(
+    if not db_user:
+        await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
-        return ConversationHandler.END
+        return
     
     # Проверка прав доступа
-    if not user.can_pack:
-        await message.reply_text(
+    if not db_user.can_pack:
+        await message.answer(
             "❌ У вас нет прав для фасовки.\n"
             "Обратитесь к администратору."
         )
-        return ConversationHandler.END
-    
-    # Инициализация данных диалога
-    context.user_data['packing'] = {
-        'user_id': user_id,
-        'started_at': datetime.utcnow()
-    }
+        return
     
     # Получение списка складов
     try:
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await message.reply_text(
+            await message.answer(
                 "❌ Нет доступных складов.\n"
                 "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            return
+        
+        # Сохранение начальных данных
+        await state.update_data(
+            user_id=user.id,
+            started_at=datetime.utcnow().isoformat()
+        )
         
         # Клавиатура выбора склада
         keyboard = get_warehouses_keyboard(warehouses, callback_prefix='pack_wh')
@@ -121,44 +131,51 @@ async def start_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "Выберите склад для фасовки:"
         )
         
-        await message.reply_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
+        if isinstance(update, CallbackQuery):
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
         
-        return SELECT_WAREHOUSE
+        await state.set_state(PackingStates.select_warehouse)
         
     except Exception as e:
-        await message.reply_text(
+        logger.error(f"Error in start_packing: {e}", exc_info=True)
+        await message.answer(
             f"❌ Ошибка при загрузке складов: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
 
 
 # ============================================================================
 # ВЫБОР СКЛАДА
 # ============================================================================
 
-async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.select_warehouse),
+    F.data.startswith("pack_wh_")
+)
+async def select_warehouse(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор склада и показывает доступные бочки.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID склада
-    warehouse_id = int(query.data.split('_')[-1])
-    context.user_data['packing']['warehouse_id'] = warehouse_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    warehouse_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка информации о складе
         warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        context.user_data['packing']['warehouse_name'] = warehouse.name
+        
+        # Сохранение выбора
+        await state.update_data(
+            warehouse_id=warehouse_id,
+            warehouse_name=warehouse.name
+        )
         
         # Получение бочек с полуфабрикатом
         barrels = await barrel_service.get_barrels_for_packing(
@@ -167,12 +184,13 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         
         if not barrels:
-            await query.message.reply_text(
+            await callback.message.answer(
                 "❌ На складе нет бочек с полуфабрикатом для фасовки.\n"
                 "Сначала необходимо выполнить производство.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Группировка бочек по SKU
         sku_map = {}
@@ -191,8 +209,17 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             sku_map[sku_id]['total_weight'] += barrel.current_weight
             sku_map[sku_id]['barrel_count'] += 1
         
-        # Сохранение информации о доступных SKU
-        context.user_data['packing']['available_skus'] = sku_map
+        # Сохранение информации (конвертируем Decimal в строки)
+        sku_map_serializable = {}
+        for sku_id, info in sku_map.items():
+            sku_map_serializable[str(sku_id)] = {
+                'name': info['name'],
+                'unit': info['unit'],
+                'total_weight': str(info['total_weight']),
+                'barrel_count': info['barrel_count']
+            }
+        
+        await state.update_data(available_skus=sku_map_serializable)
         
         # Создание клавиатуры выбора полуфабриката
         keyboard_buttons = []
@@ -204,61 +231,66 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    button_text,
+                    text=button_text,
                     callback_data=f'pack_sku_{sku_id}'
                 )
             ])
         
         keyboard_buttons.append([
-            InlineKeyboardButton("❌ Отменить", callback_data='pack_cancel')
+            InlineKeyboardButton(text="❌ Отменить", callback_data='pack_cancel')
         ])
         
-        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         text = (
             f"📦 <b>Склад:</b> {warehouse.name}\n\n"
             "📋 Выберите полуфабрикат для фасовки:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_SEMI_SKU
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(PackingStates.select_semi_sku)
         
     except Exception as e:
-        await query.message.reply_text(
+        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
+        await callback.message.answer(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВЫБОР ПОЛУФАБРИКАТА
 # ============================================================================
 
-async def select_semi_sku(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.select_semi_sku),
+    F.data.startswith("pack_sku_")
+)
+async def select_semi_sku(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор полуфабриката и показывает варианты упаковки.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID SKU
-    semi_sku_id = int(query.data.split('_')[-1])
-    context.user_data['packing']['semi_sku_id'] = semi_sku_id
+    semi_sku_id = int(callback.data.split('_')[-1])
     
-    # Информация о выбранном SKU
-    sku_info = context.user_data['packing']['available_skus'][semi_sku_id]
-    context.user_data['packing']['semi_sku_name'] = sku_info['name']
-    context.user_data['packing']['semi_sku_unit'] = sku_info['unit']
-    context.user_data['packing']['available_weight'] = sku_info['total_weight']
+    # Получаем данные из FSM
+    data = await state.get_data()
+    sku_info = data['available_skus'][str(semi_sku_id)]
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Сохранение выбора
+    await state.update_data(
+        semi_sku_id=semi_sku_id,
+        semi_sku_name=sku_info['name'],
+        semi_sku_unit=sku_info['unit'],
+        available_weight=sku_info['total_weight']
+    )
     
     try:
         # Получение вариантов упаковки для этого полуфабриката
@@ -269,12 +301,13 @@ async def select_semi_sku(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         
         if not variants:
-            await query.message.reply_text(
+            await callback.message.answer(
                 f"❌ Нет доступных вариантов упаковки для '{sku_info['name']}'.\n"
                 "Обратитесь к администратору для настройки упаковки.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Клавиатура выбора варианта упаковки
         keyboard = get_packing_variants_keyboard(
@@ -290,61 +323,64 @@ async def select_semi_sku(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "📋 Выберите вариант упаковки:"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_PACKING_VARIANT
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(PackingStates.select_packing_variant)
         
     except Exception as e:
-        await query.message.reply_text(
+        logger.error(f"Error in select_semi_sku: {e}", exc_info=True)
+        await callback.message.answer(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВЫБОР ВАРИАНТА УПАКОВКИ
 # ============================================================================
 
-async def select_packing_variant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.select_packing_variant),
+    F.data.startswith("pack_var_")
+)
+async def select_packing_variant(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор варианта упаковки.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID варианта упаковки
-    variant_id = int(query.data.split('_')[-1])
-    context.user_data['packing']['variant_id'] = variant_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    variant_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка варианта упаковки
         variant = await packing_service.get_packing_variant(session, variant_id)
         
-        context.user_data['packing']['variant_name'] = (
-            f"{variant.finished_sku.name} ({variant.container_weight} {variant.container_unit})"
-        )
-        context.user_data['packing']['container_weight'] = variant.container_weight
-        context.user_data['packing']['container_unit'] = variant.container_unit
-        context.user_data['packing']['finished_sku_name'] = variant.finished_sku.name
-        context.user_data['packing']['finished_sku_unit'] = variant.finished_sku.unit
+        # Получаем данные
+        data = await state.get_data()
+        available_weight = Decimal(data['available_weight'])
         
         # Расчет максимально возможного количества
-        available_weight = context.user_data['packing']['available_weight']
         max_units = int(available_weight / variant.container_weight)
         
-        context.user_data['packing']['max_units'] = max_units
+        # Сохранение данных
+        await state.update_data(
+            variant_id=variant_id,
+            variant_name=f"{variant.finished_sku.name} ({variant.container_weight} {variant.container_unit})",
+            container_weight=str(variant.container_weight),
+            container_unit=variant.container_unit,
+            finished_sku_name=variant.finished_sku.name,
+            finished_sku_unit=variant.finished_sku.unit,
+            max_units=max_units
+        )
         
         text = (
-            f"📦 <b>Полуфабрикат:</b> {context.user_data['packing']['semi_sku_name']}\n"
-            f"⚖️ <b>Доступно:</b> {available_weight} {context.user_data['packing']['semi_sku_unit']}\n\n"
+            f"📦 <b>Полуфабрикат:</b> {data['semi_sku_name']}\n"
+            f"⚖️ <b>Доступно:</b> {available_weight} {data['semi_sku_unit']}\n\n"
             f"📋 <b>Вариант упаковки:</b> {variant.finished_sku.name}\n"
             f"🥫 <b>Вес тары:</b> {variant.container_weight} {variant.container_unit}\n"
             f"📊 <b>Максимум единиц:</b> {max_units} шт\n\n"
@@ -352,77 +388,74 @@ async def select_packing_variant(update: Update, context: ContextTypes.DEFAULT_T
             f"<i>Максимум: {max_units}</i>"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=get_cancel_keyboard(),
-            parse_mode='HTML'
-        )
-        
-        return ENTER_UNITS_COUNT
+        await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+        await state.set_state(PackingStates.enter_units_count)
         
     except Exception as e:
-        await query.message.reply_text(
+        logger.error(f"Error in select_packing_variant: {e}", exc_info=True)
+        await callback.message.answer(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВВОД КОЛИЧЕСТВА ЕДИНИЦ
 # ============================================================================
 
-async def enter_units_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.message(StateFilter(PackingStates.enter_units_count), F.text)
+async def enter_units_count(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает ввод количества единиц для фасовки.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг целого числа
     units_count = parse_integer_input(user_input)
     
     if units_count is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n"
             "Введите целое положительное число.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_UNITS_COUNT
+        return
     
     # Валидация положительности
     validation = validate_positive_integer(units_count, min_value=1)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_UNITS_COUNT
+        return
+    
+    # Получаем данные
+    data = await state.get_data()
+    max_units = data['max_units']
     
     # Проверка не превышает ли максимум
-    max_units = context.user_data['packing']['max_units']
-    
     if units_count > max_units:
-        await message.reply_text(
+        await message.answer(
             f"❌ Количество ({units_count}) превышает максимум ({max_units}).\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_UNITS_COUNT
+        return
     
     # Сохранение количества
-    context.user_data['packing']['units_count'] = units_count
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await state.update_data(units_count=units_count)
     
     try:
         # Расчет требуемого веса и проверка доступности
-        data = context.user_data['packing']
-        
         calculation = await packing_service.calculate_available_for_packing(
             session=session,
             warehouse_id=data['warehouse_id'],
@@ -430,7 +463,8 @@ async def enter_units_count(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             variant_id=data['variant_id']
         )
         
-        required_weight = data['container_weight'] * units_count
+        container_weight = Decimal(data['container_weight'])
+        required_weight = container_weight * units_count
         
         # Формирование отчета
         review = (
@@ -445,65 +479,63 @@ async def enter_units_count(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "➡️ Продолжить?"
         )
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Продолжить", callback_data='pack_continue')],
-            [InlineKeyboardButton("🔄 Изменить количество", callback_data='pack_change_count')],
-            [InlineKeyboardButton("❌ Отменить", callback_data='pack_cancel')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Продолжить", callback_data='pack_continue')],
+            [InlineKeyboardButton(text="🔄 Изменить количество", callback_data='pack_change_count')],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data='pack_cancel')]
         ])
         
-        await message.reply_text(
-            review,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return REVIEW_CALCULATION
+        await message.answer(review, reply_markup=keyboard)
+        await state.set_state(PackingStates.review_calculation)
         
     except Exception as e:
-        await message.reply_text(
+        logger.error(f"Error in enter_units_count: {e}", exc_info=True)
+        await message.answer(
             f"❌ Ошибка при расчете: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ОБРАБОТКА КНОПКИ "ИЗМЕНИТЬ КОЛИЧЕСТВО"
 # ============================================================================
 
-async def change_units_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.enter_units_count, PackingStates.review_calculation),
+    F.data == "pack_change_count"
+)
+async def change_units_count(callback: CallbackQuery, state: FSMContext) -> None:
     """
     Обрабатывает запрос на изменение количества единиц.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
-    max_units = context.user_data['packing']['max_units']
+    data = await state.get_data()
+    max_units = data['max_units']
     
     text = (
         "📝 Введите новое количество единиц для фасовки:\n\n"
         f"<i>Максимум: {max_units}</i>"
     )
     
-    await query.message.edit_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_UNITS_COUNT
+    await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(PackingStates.enter_units_count)
 
 
 # ============================================================================
 # ПОДТВЕРЖДЕНИЕ НАЧАЛА ФАСОВКИ
 # ============================================================================
 
-async def confirm_continue_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.review_calculation),
+    F.data == "pack_continue"
+)
+async def confirm_continue_packing(callback: CallbackQuery, state: FSMContext) -> None:
     """
     Переходит к запросу данных о браке тары.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     text = (
         "🗑 <b>Учет брака тары</b>\n\n"
@@ -511,61 +543,58 @@ async def confirm_continue_packing(update: Update, context: ContextTypes.DEFAULT
         "<i>Если брака нет, введите 0</i>"
     )
     
-    await query.message.edit_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_WASTE_CONTAINER
+    await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(PackingStates.enter_waste_container)
 
 
 # ============================================================================
 # ВВОД БРАКА ТАРЫ
 # ============================================================================
 
-async def enter_waste_container(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.message(StateFilter(PackingStates.enter_waste_container), F.text)
+async def enter_waste_container(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод брака тары.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг целого числа
     waste_container = parse_integer_input(user_input)
     
     if waste_container is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n"
             "Введите целое неотрицательное число.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_CONTAINER
+        return
     
     # Валидация неотрицательности
     if waste_container < 0:
-        await message.reply_text(
+        await message.answer(
             "❌ Количество брака не может быть отрицательным.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_CONTAINER
+        return
+    
+    # Получаем данные
+    data = await state.get_data()
+    units_count = data['units_count']
     
     # Проверка: брак не может превышать количество единиц
-    units_count = context.user_data['packing']['units_count']
-    
     if waste_container > units_count:
-        await message.reply_text(
+        await message.answer(
             f"❌ Брак тары ({waste_container}) не может превышать "
             f"количество единиц ({units_count}).\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_CONTAINER
+        return
     
     # Сохранение брака
-    context.user_data['packing']['waste_container'] = waste_container
+    await state.update_data(waste_container=waste_container)
     
     # Запрос примечаний
     text = (
@@ -574,49 +603,48 @@ async def enter_waste_container(update: Update, context: ContextTypes.DEFAULT_TY
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_NOTES
+    await message.answer(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(PackingStates.enter_notes)
 
 
 # ============================================================================
 # ВВОД ПРИМЕЧАНИЙ
 # ============================================================================
 
-async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.message(StateFilter(PackingStates.enter_notes), F.text)
+async def enter_notes(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод примечаний и показывает подтверждение.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['packing']['notes'] = None
+        await state.update_data(notes=None)
     else:
         # Валидация длины
         validation = validate_text_length(user_input, max_length=500)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return ENTER_NOTES
+            return
         
-        context.user_data['packing']['notes'] = user_input
+        await state.update_data(notes=user_input)
     
     # Формирование сводки
-    data = context.user_data['packing']
+    data = await state.get_data()
     
-    required_weight = data['container_weight'] * data['units_count']
-    net_units = data['units_count'] - data['waste_container']
-    net_weight = data['container_weight'] * net_units
+    container_weight = Decimal(data['container_weight'])
+    units_count = data['units_count']
+    waste_container = data['waste_container']
+    
+    required_weight = container_weight * units_count
+    net_units = units_count - waste_container
+    net_weight = container_weight * net_units
     
     summary = (
         "📋 <b>Подтверждение фасовки</b>\n\n"
@@ -625,12 +653,12 @@ async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f"🥫 <b>Упаковка:</b> {data['finished_sku_name']}\n"
         f"⚖️ <b>Вес тары:</b> {data['container_weight']} {data['container_unit']}\n\n"
         f"📊 <b>Фасовка:</b>\n"
-        f"   • Количество единиц: {data['units_count']} шт\n"
+        f"   • Количество единиц: {units_count} шт\n"
         f"   • Требуется полуфабриката: {required_weight} {data['semi_sku_unit']}\n"
     )
     
-    if data['waste_container'] > 0:
-        summary += f"   • Брак тары: {data['waste_container']} шт\n"
+    if waste_container > 0:
+        summary += f"   • Брак тары: {waste_container} шт\n"
     
     summary += (
         f"   • Годных единиц: {net_units} шт\n"
@@ -642,33 +670,36 @@ async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     summary += "\n❓ Подтвердить выполнение фасовки?"
     
-    await message.reply_text(
+    await message.answer(
         summary,
         reply_markup=get_confirmation_keyboard(
             confirm_callback='pack_execute',
             cancel_callback='pack_cancel'
-        ),
-        parse_mode='HTML'
+        )
     )
     
-    return CONFIRM_EXECUTION
+    await state.set_state(PackingStates.confirm_execution)
 
 
 # ============================================================================
 # ВЫПОЛНЕНИЕ ФАСОВКИ
 # ============================================================================
 
-async def execute_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(
+    StateFilter(PackingStates.confirm_execution),
+    F.data == "pack_execute"
+)
+async def execute_packing(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Выполняет фасовку: списывает полуфабрикат, создает готовую продукцию.
     """
-    query = update.callback_query
-    await query.answer("⏳ Выполнение фасовки...")
+    await callback.answer("⏳ Выполнение фасовки...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['packing']
+    data = await state.get_data()
     
     try:
         # Выполнение фасовки через сервис
@@ -722,107 +753,43 @@ async def execute_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if waste_records:
             report += f"\n🗑 <b>Учтено отходов:</b> {len(waste_records)}"
         
-        await query.message.edit_text(
-            report,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
-        )
+        await callback.message.edit_text(report, reply_markup=get_main_menu_keyboard())
         
-        # Очистка данных
-        context.user_data.pop('packing', None)
-        
-        return ConversationHandler.END
+        # Очистка состояния
+        await state.clear()
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in execute_packing: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ <b>Ошибка при выполнении фасовки:</b>\n\n"
             f"{str(e)}\n\n"
             "Операция отменена.",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
+            reply_markup=get_main_menu_keyboard()
         )
         
-        context.user_data.pop('packing', None)
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ОТМЕНА ДИАЛОГА
 # ============================================================================
 
-async def cancel_packing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@packing_router.callback_query(F.data.in_(["pack_cancel", "cancel"]))
+@packing_router.message(Command("cancel"), StateFilter('*'))
+async def cancel_packing(update: Message | CallbackQuery, state: FSMContext) -> None:
     """
     Отменяет процесс фасовки.
     """
-    query = update.callback_query if update.callback_query else None
-    
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+    else:
+        message = update
     
-    # Очистка данных
-    context.user_data.pop('packing', None)
+    # Очистка состояния
+    await state.clear()
     
-    await message.reply_text(
+    await message.answer(
         "❌ Фасовка отменена.",
         reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-
-# ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
-# ============================================================================
-
-def get_packing_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для фасовки.
-    
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('packing', start_packing),
-            CallbackQueryHandler(start_packing, pattern='^packing_start$')
-        ],
-        states={
-            SELECT_WAREHOUSE: [
-                CallbackQueryHandler(select_warehouse, pattern='^pack_wh_\\d+$')
-            ],
-            SELECT_SEMI_SKU: [
-                CallbackQueryHandler(select_semi_sku, pattern='^pack_sku_\\d+$')
-            ],
-            SELECT_PACKING_VARIANT: [
-                CallbackQueryHandler(select_packing_variant, pattern='^pack_var_\\d+$')
-            ],
-            ENTER_UNITS_COUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_units_count),
-                CallbackQueryHandler(change_units_count, pattern='^pack_change_count$')
-            ],
-            REVIEW_CALCULATION: [
-                CallbackQueryHandler(confirm_continue_packing, pattern='^pack_continue$'),
-                CallbackQueryHandler(change_units_count, pattern='^pack_change_count$'),
-                CallbackQueryHandler(cancel_packing, pattern='^pack_cancel$')
-            ],
-            ENTER_WASTE_CONTAINER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_waste_container)
-            ],
-            ENTER_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_notes)
-            ],
-            CONFIRM_EXECUTION: [
-                CallbackQueryHandler(execute_packing, pattern='^pack_execute$'),
-                CallbackQueryHandler(cancel_packing, pattern='^pack_cancel$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_packing),
-            CallbackQueryHandler(cancel_packing, pattern='^cancel$')
-        ],
-        name='packing_conversation',
-        persistent=False
     )
