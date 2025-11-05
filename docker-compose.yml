@@ -34,7 +34,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OWNER_TELEGRAM_ID=${OWNER_TELEGRAM_ID}
-      - DATABASE_URL=postgresql+psycopg2://warehouse:warehouse@db:5432/warehouse
+      - DATABASE_URL=postgresql+asyncpg://warehouse:warehouse@db:5432/warehouse
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FILE=logs/warehouse.log
       - DEBUG=${DEBUG:-False}
