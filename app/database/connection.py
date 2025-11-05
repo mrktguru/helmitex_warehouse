@@ -23,6 +23,9 @@ from sqlalchemy.pool import NullPool, QueuePool
 from app.config import settings
 from app.database.models import Base
 
+# Настройка логирования
+logger = logging.getLogger(__name__)
+
 
 # Глобальные переменные для engine и session factory
 engine: AsyncEngine | None = None
