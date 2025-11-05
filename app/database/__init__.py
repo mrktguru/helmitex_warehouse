@@ -44,6 +44,15 @@ from .models import (
     WasteType,
 )
 
+# ИМПОРТ ФУНКЦИЙ ИЗ CONNECTION.PY
+from .connection import (
+    engine,
+    SessionLocal,
+    get_session,
+    init_db,
+    close_db,
+)
+
 
 # Список всех экспортируемых моделей
 __all__ = [
@@ -81,7 +90,7 @@ __all__ = [
     'ReserveType',
     'WasteType',
     
-    # Утилиты (будут добавлены после импорта connection)
+    # Утилиты подключения
     'engine',
     'SessionLocal',
     'get_session',
@@ -308,17 +317,6 @@ DATABASE_METADATA = {
     'enum_types': len(get_enum_types()),
     'api_version': __version__,
 }
-
-
-# Примечание: Импорт connection будет добавлен после создания файла connection.py
-# from .connection import engine, SessionLocal, get_session, init_db, close_db
-
-# Временные заглушки (будут заменены после создания connection.py)
-engine = None
-SessionLocal = None
-get_session = None
-init_db = None
-close_db = None
 
 
 def print_database_info():
