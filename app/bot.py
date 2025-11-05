@@ -321,10 +321,13 @@ async def help_callback(callback: CallbackQuery, session: AsyncSession) -> None:
 # НЕИЗВЕСТНЫЕ КОМАНДЫ
 # ============================================================================
 
-@main_router.message(Command())
+@main_router.message(F.text.startswith('/'))
 async def unknown_command(message: Message) -> None:
     """
     Обрабатывает неизвестные команды.
+    
+    В aiogram 3.x фильтр Command() требует хотя бы один аргумент.
+    Для catch-all неизвестных команд используем F.text.startswith('/').
     """
     await message.answer(
         "❌ Неизвестная команда.\n"
