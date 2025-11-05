@@ -1,5 +1,5 @@
 """
-Обработчик команд производства полуфабрикатов.
+Обработчик команд производства полуфабрикатов (aiogram 3.x).
 
 Этот модуль реализует диалоговые сценарии для:
 - Создания производственных партий
@@ -9,12 +9,12 @@
 - Учета отходов и брака
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
-from decimal import Decimal, InvalidOperation
+from aiogram import Router, F
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from decimal import Decimal
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,79 +37,89 @@ from app.validators.input_validators import (
     validate_text_length,
     parse_decimal_input
 )
+from app.utils.logger import get_logger
+
+logger = get_logger("production_handler")
+
+# Создаём роутер для production handlers
+production_router = Router(name="production")
 
 
-# Состояния диалога
-(
-    SELECT_WAREHOUSE,
-    SELECT_RECIPE,
-    ENTER_BATCH_SIZE,
-    REVIEW_REQUIREMENTS,
-    CONFIRM_START,
-    ENTER_ACTUAL_OUTPUT,
-    ENTER_WASTE_SEMI,
-    ENTER_NOTES,
-    CONFIRM_EXECUTION
-) = range(9)
+# ============================================================================
+# СОСТОЯНИЯ FSM
+# ============================================================================
+
+class ProductionStates(StatesGroup):
+    """Состояния диалога производства."""
+    select_warehouse = State()
+    select_recipe = State()
+    enter_batch_size = State()
+    review_requirements = State()
+    enter_actual_output = State()
+    enter_waste_semi = State()
+    enter_notes = State()
+    confirm_execution = State()
 
 
 # ============================================================================
 # НАЧАЛО ДИАЛОГА ПРОИЗВОДСТВА
 # ============================================================================
 
-async def start_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.message(Command("production"))
+@production_router.callback_query(F.data == "production_start")
+async def start_production(
+    update: Message | CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Начинает процесс создания производственной партии.
     
     Команда: /production или кнопка "Производство"
     """
-    query = update.callback_query
-    
-    # Подтверждение callback
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    # Определяем тип update
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+        user = update.from_user
+    else:
+        message = update
+        user = update.from_user
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Получение пользователя из БД
+    db_user = await session.get(User, user.id)
     
-    # Получение пользователя
-    user_id = update.effective_user.id
-    user = await session.get(User, user_id)
-    
-    if not user:
-        await message.reply_text(
+    if not db_user:
+        await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
-        return ConversationHandler.END
+        return
     
     # Проверка прав доступа
-    if not user.can_produce:
-        await message.reply_text(
+    if not db_user.can_produce:
+        await message.answer(
             "❌ У вас нет прав для производства.\n"
             "Обратитесь к администратору."
         )
-        return ConversationHandler.END
-    
-    # Инициализация данных диалога
-    context.user_data['production'] = {
-        'user_id': user_id,
-        'started_at': datetime.utcnow()
-    }
+        return
     
     # Получение списка складов
     try:
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await message.reply_text(
+            await message.answer(
                 "❌ Нет доступных складов.\n"
                 "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            return
+        
+        # Сохранение начальных данных
+        await state.update_data(
+            user_id=user.id,
+            started_at=datetime.utcnow().isoformat()
+        )
         
         # Клавиатура выбора склада
         keyboard = get_warehouses_keyboard(warehouses, callback_prefix='prod_wh')
@@ -119,44 +129,51 @@ async def start_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Выберите склад для производства:"
         )
         
-        await message.reply_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
+        if isinstance(update, CallbackQuery):
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
         
-        return SELECT_WAREHOUSE
+        await state.set_state(ProductionStates.select_warehouse)
         
     except Exception as e:
-        await message.reply_text(
+        logger.error(f"Error in start_production: {e}", exc_info=True)
+        await message.answer(
             f"❌ Ошибка при загрузке складов: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
 
 
 # ============================================================================
 # ВЫБОР СКЛАДА
 # ============================================================================
 
-async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(
+    StateFilter(ProductionStates.select_warehouse),
+    F.data.startswith("prod_wh_")
+)
+async def select_warehouse(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор склада.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID склада
-    warehouse_id = int(query.data.split('_')[-1])
-    context.user_data['production']['warehouse_id'] = warehouse_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    warehouse_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка информации о складе
         warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        context.user_data['production']['warehouse_name'] = warehouse.name
+        
+        # Сохранение выбора
+        await state.update_data(
+            warehouse_id=warehouse_id,
+            warehouse_name=warehouse.name
+        )
         
         # Получение активных рецептов
         recipes = await recipe_service.get_recipes(
@@ -166,12 +183,13 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         
         if not recipes:
-            await query.message.reply_text(
+            await callback.message.answer(
                 "❌ В системе нет активных технологических карт.\n"
                 "Обратитесь к администратору для создания рецептов.",
                 reply_markup=get_main_menu_keyboard()
             )
-            return ConversationHandler.END
+            await state.clear()
+            return
         
         # Клавиатура выбора рецепта
         keyboard = get_recipes_keyboard(
@@ -185,48 +203,52 @@ async def select_warehouse(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "📋 Выберите технологическую карту (рецепт):"
         )
         
-        await query.message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return SELECT_RECIPE
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(ProductionStates.select_recipe)
         
     except Exception as e:
-        await query.message.reply_text(
+        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
+        await callback.message.answer(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВЫБОР РЕЦЕПТА
 # ============================================================================
 
-async def select_recipe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(
+    StateFilter(ProductionStates.select_recipe),
+    F.data.startswith("prod_recipe_")
+)
+async def select_recipe(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор технологической карты.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     # Извлечение ID рецепта
-    recipe_id = int(query.data.split('_')[-1])
-    context.user_data['production']['recipe_id'] = recipe_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    recipe_id = int(callback.data.split('_')[-1])
     
     try:
         # Загрузка рецепта с компонентами
         recipe = await recipe_service.get_recipe_with_components(session, recipe_id)
         
-        context.user_data['production']['recipe_name'] = recipe.name
-        context.user_data['production']['output_percentage'] = recipe.output_percentage
-        context.user_data['production']['semi_sku_name'] = recipe.semi_finished_sku.name
-        context.user_data['production']['semi_sku_unit'] = recipe.semi_finished_sku.unit
+        # Сохранение данных
+        await state.update_data(
+            recipe_id=recipe_id,
+            recipe_name=recipe.name,
+            output_percentage=str(recipe.output_percentage),
+            semi_sku_name=recipe.semi_finished_sku.name,
+            semi_sku_unit=recipe.semi_finished_sku.unit,
+            batch_size_recommended=str(recipe.batch_size)
+        )
         
         # Формирование описания рецепта
         recipe_text = (
@@ -249,87 +271,85 @@ async def select_recipe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             f"<i>Рекомендуется: {recipe.batch_size}</i>"
         )
         
-        await query.message.edit_text(
-            recipe_text,
-            reply_markup=get_cancel_keyboard(),
-            parse_mode='HTML'
-        )
-        
-        return ENTER_BATCH_SIZE
+        await callback.message.edit_text(recipe_text, reply_markup=get_cancel_keyboard())
+        await state.set_state(ProductionStates.enter_batch_size)
         
     except Exception as e:
-        await query.message.reply_text(
+        logger.error(f"Error in select_recipe: {e}", exc_info=True)
+        await callback.message.answer(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВВОД РАЗМЕРА ЗАМЕСА
 # ============================================================================
 
-async def enter_batch_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.message(StateFilter(ProductionStates.enter_batch_size), F.text)
+async def enter_batch_size(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает ввод размера замеса и проверяет наличие сырья.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг количества
     batch_size = parse_decimal_input(user_input)
     
     if batch_size is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Примеры: <code>100</code>, <code>500</code>, <code>1000</code>\n\n"
             "Попробуйте снова:",
-            parse_mode='HTML',
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_BATCH_SIZE
+        return
     
     # Валидация положительности
     validation = validate_positive_decimal(batch_size, min_value=Decimal('0.1'))
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_BATCH_SIZE
+        return
     
-    # Сохранение размера замеса
-    context.user_data['production']['batch_size'] = batch_size
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Получаем данные
+    data = await state.get_data()
     
     try:
         # Проверка наличия сырья
-        recipe_id = context.user_data['production']['recipe_id']
-        warehouse_id = context.user_data['production']['warehouse_id']
-        
         availability = await production_service.check_materials_availability(
             session=session,
-            recipe_id=recipe_id,
+            recipe_id=data['recipe_id'],
             batch_size=batch_size,
-            warehouse_id=warehouse_id
+            warehouse_id=data['warehouse_id']
         )
         
-        # Сохранение данных о требованиях
-        context.user_data['production']['requirements'] = availability['requirements']
-        context.user_data['production']['all_available'] = availability['all_available']
+        # Сохранение данных
+        await state.update_data(
+            batch_size=str(batch_size),
+            requirements=availability['requirements'],
+            all_available=availability['all_available']
+        )
         
         # Формирование отчета о наличии
+        output_percentage = Decimal(data['output_percentage'])
+        expected_output = batch_size * output_percentage / 100
+        
         report = (
             f"📊 <b>Проверка наличия сырья</b>\n\n"
-            f"🏭 <b>Склад:</b> {context.user_data['production']['warehouse_name']}\n"
-            f"📋 <b>Рецепт:</b> {context.user_data['production']['recipe_name']}\n"
+            f"🏭 <b>Склад:</b> {data['warehouse_name']}\n"
+            f"📋 <b>Рецепт:</b> {data['recipe_name']}\n"
             f"⚖️ <b>Размер замеса:</b> {batch_size} кг\n"
-            f"📈 <b>Ожидаемый выход:</b> {batch_size * context.user_data['production']['output_percentage'] / 100} "
-            f"{context.user_data['production']['semi_sku_unit']}\n\n"
+            f"📈 <b>Ожидаемый выход:</b> {expected_output} {data['semi_sku_unit']}\n\n"
             "<b>Требуемое сырье:</b>\n"
         )
         
@@ -353,73 +373,72 @@ async def enter_batch_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 confirm_callback='prod_start',
                 cancel_callback='prod_cancel'
             )
+            await state.set_state(ProductionStates.review_requirements)
         else:
             report += (
                 "❌ <b>Недостаточно сырья для производства.</b>\n\n"
                 "Выберите действие:"
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Изменить размер замеса", callback_data='prod_change_size')],
-                [InlineKeyboardButton("❌ Отменить", callback_data='prod_cancel')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Изменить размер замеса", callback_data='prod_change_size')],
+                [InlineKeyboardButton(text="❌ Отменить", callback_data='prod_cancel')]
             ])
+            # Остаемся в состоянии enter_batch_size
         
-        await message.reply_text(
-            report,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        
-        return REVIEW_REQUIREMENTS if all_ok else ENTER_BATCH_SIZE
+        await message.answer(report, reply_markup=keyboard)
         
     except Exception as e:
-        await message.reply_text(
+        logger.error(f"Error in enter_batch_size: {e}", exc_info=True)
+        await message.answer(
             f"❌ Ошибка при проверке сырья: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ОБРАБОТКА КНОПКИ "ИЗМЕНИТЬ РАЗМЕР"
 # ============================================================================
 
-async def change_batch_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(
+    StateFilter(ProductionStates.enter_batch_size),
+    F.data == "prod_change_size"
+)
+async def change_batch_size(callback: CallbackQuery, state: FSMContext) -> None:
     """
     Обрабатывает запрос на изменение размера замеса.
     """
-    query = update.callback_query
-    await query.answer()
+    await callback.answer()
     
     text = (
         "📝 Введите новый размер замеса (кг):\n\n"
         "<i>Примеры: 100, 500, 1000</i>"
     )
     
-    await query.message.edit_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_BATCH_SIZE
+    await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+    # Остаемся в состоянии enter_batch_size
 
 
 # ============================================================================
 # ПОДТВЕРЖДЕНИЕ НАЧАЛА ПРОИЗВОДСТВА
 # ============================================================================
 
-async def confirm_start_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(
+    StateFilter(ProductionStates.review_requirements),
+    F.data == "prod_start"
+)
+async def confirm_start_production(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Создает производственную партию и запускает производство.
     """
-    query = update.callback_query
-    await query.answer("⏳ Создание партии...")
+    await callback.answer("⏳ Создание партии...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['production']
+    data = await state.get_data()
     
     try:
         # Создание партии через сервис
@@ -427,14 +446,16 @@ async def confirm_start_production(update: Update, context: ContextTypes.DEFAULT
             session=session,
             warehouse_id=data['warehouse_id'],
             recipe_id=data['recipe_id'],
-            batch_size=data['batch_size'],
+            batch_size=Decimal(data['batch_size']),
             created_by_id=data['user_id'],
             production_date=date.today()
         )
         
         # Сохранение ID партии
-        context.user_data['production']['batch_id'] = batch.id
-        context.user_data['production']['batch_number'] = batch.batch_number
+        await state.update_data(
+            batch_id=batch.id,
+            batch_number=batch.batch_number
+        )
         
         # Успешное создание
         success_text = (
@@ -447,87 +468,86 @@ async def confirm_start_production(update: Update, context: ContextTypes.DEFAULT
             "➡️ Переходим к выполнению замеса..."
         )
         
-        await query.message.edit_text(
-            success_text,
-            parse_mode='HTML'
-        )
+        await callback.message.edit_text(success_text)
         
         # Автоматический переход к вводу фактического выхода
-        await query.message.reply_text(
+        output_percentage = Decimal(data['output_percentage'])
+        batch_size = Decimal(data['batch_size'])
+        expected_output = batch_size * output_percentage / 100
+        
+        await callback.message.answer(
             f"📊 <b>Выполнение замеса</b>\n\n"
-            f"Ожидаемый выход: {data['batch_size'] * data['output_percentage'] / 100} "
-            f"{data['semi_sku_unit']}\n\n"
+            f"Ожидаемый выход: {expected_output} {data['semi_sku_unit']}\n\n"
             f"📝 Введите фактический выход полуфабриката ({data['semi_sku_unit']}):\n\n"
             "<i>Примеры: 95, 98.5, 100</i>",
-            parse_mode='HTML',
             reply_markup=get_cancel_keyboard()
         )
         
-        return ENTER_ACTUAL_OUTPUT
+        await state.set_state(ProductionStates.enter_actual_output)
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in confirm_start_production: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ <b>Ошибка при создании партии:</b>\n\n"
             f"{str(e)}\n\n"
             "Производство отменено.",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
+            reply_markup=get_main_menu_keyboard()
         )
         
-        context.user_data.pop('production', None)
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ВВОД ФАКТИЧЕСКОГО ВЫХОДА
 # ============================================================================
 
-async def enter_actual_output(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.message(StateFilter(ProductionStates.enter_actual_output), F.text)
+async def enter_actual_output(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод фактического выхода полуфабриката.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг количества
     actual_output = parse_decimal_input(user_input)
     
     if actual_output is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Попробуйте снова:",
-            parse_mode='HTML',
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_ACTUAL_OUTPUT
+        return
     
     # Валидация
     validation = validate_positive_decimal(actual_output, min_value=Decimal('0.1'))
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_ACTUAL_OUTPUT
+        return
     
-    # Проверка разумности значения (не больше 150% от ожидаемого)
-    data = context.user_data['production']
-    expected_output = data['batch_size'] * data['output_percentage'] / 100
+    # Проверка разумности значения
+    data = await state.get_data()
+    batch_size = Decimal(data['batch_size'])
+    output_percentage = Decimal(data['output_percentage'])
+    expected_output = batch_size * output_percentage / 100
     
     if actual_output > expected_output * Decimal('1.5'):
-        await message.reply_text(
+        await message.answer(
             f"⚠️ Фактический выход ({actual_output}) значительно превышает "
             f"ожидаемый ({expected_output}).\n\n"
             "Проверьте правильность ввода.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_ACTUAL_OUTPUT
+        return
     
     # Сохранение фактического выхода
-    context.user_data['production']['actual_output'] = actual_output
+    await state.update_data(actual_output=str(actual_output))
     
     # Запрос брака полуфабриката
     text = (
@@ -536,60 +556,56 @@ async def enter_actual_output(update: Update, context: ContextTypes.DEFAULT_TYPE
         "<i>Если брака нет, введите 0</i>"
     )
     
-    await message.reply_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_WASTE_SEMI
+    await message.answer(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(ProductionStates.enter_waste_semi)
 
 
 # ============================================================================
 # ВВОД БРАКА ПОЛУФАБРИКАТА
 # ============================================================================
 
-async def enter_waste_semi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.message(StateFilter(ProductionStates.enter_waste_semi), F.text)
+async def enter_waste_semi(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод брака полуфабриката.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Парсинг количества
     waste_semi = parse_decimal_input(user_input)
     
     if waste_semi is None:
-        await message.reply_text(
+        await message.answer(
             "❌ Некорректный формат числа.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_SEMI
+        return
     
     # Валидация неотрицательности
     if waste_semi < 0:
-        await message.reply_text(
+        await message.answer(
             "❌ Количество брака не может быть отрицательным.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_SEMI
+        return
     
     # Проверка: брак не может превышать фактический выход
-    actual_output = context.user_data['production']['actual_output']
+    data = await state.get_data()
+    actual_output = Decimal(data['actual_output'])
     
     if waste_semi > actual_output:
-        await message.reply_text(
+        await message.answer(
             f"❌ Брак ({waste_semi}) не может превышать "
             f"фактический выход ({actual_output}).\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return ENTER_WASTE_SEMI
+        return
     
     # Сохранение брака
-    context.user_data['production']['waste_semi'] = waste_semi
+    await state.update_data(waste_semi=str(waste_semi))
     
     # Запрос примечаний
     text = (
@@ -598,48 +614,48 @@ async def enter_waste_semi(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "<i>Или отправьте '-' для пропуска</i>"
     )
     
-    await message.reply_text(
-        text,
-        reply_markup=get_cancel_keyboard(),
-        parse_mode='HTML'
-    )
-    
-    return ENTER_NOTES
+    await message.answer(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(ProductionStates.enter_notes)
 
 
 # ============================================================================
 # ВВОД ПРИМЕЧАНИЙ
 # ============================================================================
 
-async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.message(StateFilter(ProductionStates.enter_notes), F.text)
+async def enter_notes(message: Message, state: FSMContext) -> None:
     """
     Обрабатывает ввод примечаний и показывает подтверждение.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Проверка на пропуск
     if user_input == '-':
-        context.user_data['production']['notes'] = None
+        await state.update_data(notes=None)
     else:
         # Валидация длины
         validation = validate_text_length(user_input, max_length=500)
         
         if not validation['valid']:
-            await message.reply_text(
+            await message.answer(
                 f"❌ {validation['error']}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
-            return ENTER_NOTES
+            return
         
-        context.user_data['production']['notes'] = user_input
+        await state.update_data(notes=user_input)
     
     # Формирование сводки
-    data = context.user_data['production']
+    data = await state.get_data()
     
-    net_output = data['actual_output'] - data['waste_semi']
-    expected_output = data['batch_size'] * data['output_percentage'] / 100
+    actual_output = Decimal(data['actual_output'])
+    waste_semi = Decimal(data['waste_semi'])
+    batch_size = Decimal(data['batch_size'])
+    output_percentage = Decimal(data['output_percentage'])
+    
+    net_output = actual_output - waste_semi
+    expected_output = batch_size * output_percentage / 100
     efficiency = (net_output / expected_output * 100) if expected_output > 0 else 0
     
     summary = (
@@ -647,11 +663,11 @@ async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f"🆔 <b>Партия:</b> {data['batch_number']}\n"
         f"🏭 <b>Склад:</b> {data['warehouse_name']}\n"
         f"📋 <b>Рецепт:</b> {data['recipe_name']}\n"
-        f"⚖️ <b>Размер замеса:</b> {data['batch_size']} кг\n\n"
+        f"⚖️ <b>Размер замеса:</b> {batch_size} кг\n\n"
         f"📊 <b>Результаты:</b>\n"
         f"   • Ожидаемый выход: {expected_output} {data['semi_sku_unit']}\n"
-        f"   • Фактический выход: {data['actual_output']} {data['semi_sku_unit']}\n"
-        f"   • Брак полуфабриката: {data['waste_semi']} {data['semi_sku_unit']}\n"
+        f"   • Фактический выход: {actual_output} {data['semi_sku_unit']}\n"
+        f"   • Брак полуфабриката: {waste_semi} {data['semi_sku_unit']}\n"
         f"   • Чистый выход: {net_output} {data['semi_sku_unit']}\n"
         f"   • Эффективность: {efficiency:.1f}%\n"
     )
@@ -661,41 +677,44 @@ async def enter_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     summary += "\n❓ Подтвердить выполнение замеса?"
     
-    await message.reply_text(
+    await message.answer(
         summary,
         reply_markup=get_confirmation_keyboard(
             confirm_callback='prod_execute',
             cancel_callback='prod_cancel'
-        ),
-        parse_mode='HTML'
+        )
     )
     
-    return CONFIRM_EXECUTION
+    await state.set_state(ProductionStates.confirm_execution)
 
 
 # ============================================================================
 # ВЫПОЛНЕНИЕ ЗАМЕСА
 # ============================================================================
 
-async def execute_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(
+    StateFilter(ProductionStates.confirm_execution),
+    F.data == "prod_execute"
+)
+async def execute_production(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Выполняет замес: списывает сырье, создает бочки, учитывает отходы.
     """
-    query = update.callback_query
-    await query.answer("⏳ Выполнение замеса...")
+    await callback.answer("⏳ Выполнение замеса...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    data = context.user_data['production']
+    data = await state.get_data()
     
     try:
         # Выполнение замеса через сервис
         result = await production_service.execute_batch(
             session=session,
             batch_id=data['batch_id'],
-            actual_output=data['actual_output'],
-            waste_semi_finished=data['waste_semi'],
+            actual_output=Decimal(data['actual_output']),
+            waste_semi_finished=Decimal(data['waste_semi']),
             performed_by_id=data['user_id'],
             notes=data.get('notes')
         )
@@ -706,7 +725,7 @@ async def execute_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
         movements = result['movements']
         waste_records = result['waste_records']
         
-        net_output = data['actual_output'] - data['waste_semi']
+        net_output = Decimal(data['actual_output']) - Decimal(data['waste_semi'])
         
         report = (
             "✅ <b>Замес успешно выполнен!</b>\n\n"
@@ -721,7 +740,7 @@ async def execute_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         report += f"\n📊 <b>Итого полуфабриката:</b> {net_output} {data['semi_sku_unit']}\n"
         
-        if data['waste_semi'] > 0:
+        if Decimal(data['waste_semi']) > 0:
             report += f"🗑 <b>Брак полуфабриката:</b> {data['waste_semi']} {data['semi_sku_unit']}\n"
         
         report += f"\n📋 <b>Списано сырья:</b> {len([m for m in movements if m.quantity < 0])}\n"
@@ -731,106 +750,43 @@ async def execute_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         report += f"\n📊 <b>Статус партии:</b> {batch.status.value}"
         
-        await query.message.edit_text(
-            report,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
-        )
+        await callback.message.edit_text(report, reply_markup=get_main_menu_keyboard())
         
-        # Очистка данных
-        context.user_data.pop('production', None)
-        
-        return ConversationHandler.END
+        # Очистка состояния
+        await state.clear()
         
     except Exception as e:
-        await query.message.edit_text(
+        logger.error(f"Error in execute_production: {e}", exc_info=True)
+        await callback.message.edit_text(
             f"❌ <b>Ошибка при выполнении замеса:</b>\n\n"
             f"{str(e)}\n\n"
             "Операция отменена.",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode='HTML'
+            reply_markup=get_main_menu_keyboard()
         )
         
-        context.user_data.pop('production', None)
-        return ConversationHandler.END
+        await state.clear()
 
 
 # ============================================================================
 # ОТМЕНА ДИАЛОГА
 # ============================================================================
 
-async def cancel_production(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@production_router.callback_query(F.data.in_(["prod_cancel", "cancel"]))
+@production_router.message(Command("cancel"), StateFilter('*'))
+async def cancel_production(update: Message | CallbackQuery, state: FSMContext) -> None:
     """
     Отменяет процесс производства.
     """
-    query = update.callback_query if update.callback_query else None
-    
-    if query:
-        await query.answer()
-        message = query.message
-    else:
+    if isinstance(update, CallbackQuery):
+        await update.answer()
         message = update.message
+    else:
+        message = update
     
-    # Очистка данных
-    context.user_data.pop('production', None)
+    # Очистка состояния
+    await state.clear()
     
-    await message.reply_text(
+    await message.answer(
         "❌ Производство отменено.",
         reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-
-# ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
-# ============================================================================
-
-def get_production_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для производства.
-    
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('production', start_production),
-            CallbackQueryHandler(start_production, pattern='^production_start$')
-        ],
-        states={
-            SELECT_WAREHOUSE: [
-                CallbackQueryHandler(select_warehouse, pattern='^prod_wh_\\d+$')
-            ],
-            SELECT_RECIPE: [
-                CallbackQueryHandler(select_recipe, pattern='^prod_recipe_\\d+$')
-            ],
-            ENTER_BATCH_SIZE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_batch_size),
-                CallbackQueryHandler(change_batch_size, pattern='^prod_change_size$')
-            ],
-            REVIEW_REQUIREMENTS: [
-                CallbackQueryHandler(confirm_start_production, pattern='^prod_start$'),
-                CallbackQueryHandler(cancel_production, pattern='^prod_cancel$')
-            ],
-            ENTER_ACTUAL_OUTPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_actual_output)
-            ],
-            ENTER_WASTE_SEMI: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_waste_semi)
-            ],
-            ENTER_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, enter_notes)
-            ],
-            CONFIRM_EXECUTION: [
-                CallbackQueryHandler(execute_production, pattern='^prod_execute$'),
-                CallbackQueryHandler(cancel_production, pattern='^prod_cancel$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_production),
-            CallbackQueryHandler(cancel_production, pattern='^cancel$')
-        ],
-        name='production_conversation',
-        persistent=False
     )
