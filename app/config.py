@@ -34,6 +34,11 @@ class Settings(BaseSettings):
         description="Telegram ID главного администратора (для уведомлений)"
     )
     
+    ADMIN_IDS: list[int] = Field(
+        default_factory=list,
+        description="Список Telegram ID всех администраторов"
+    )
+    
     # ========================================================================
     # DATABASE
     # ========================================================================
@@ -92,12 +97,27 @@ class Settings(BaseSettings):
     
     DEBUG: bool = Field(
         default=False,
-        description="Режим отладки"
+        description="Режим отладки (deprecated, используйте APP_ENV)"
     )
     
     LOG_LEVEL: str = Field(
         default="INFO",
         description="Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+    )
+    
+    APP_ENV: str = Field(
+        default="production",
+        description="Окружение приложения: development, staging, production"
+    )
+    
+    AUTO_CREATE_TABLES: bool = Field(
+        default=False,
+        description="Автоматически создавать таблицы БД при старте (только для development)"
+    )
+    
+    DROP_PENDING_UPDATES: bool = Field(
+        default=True,
+        description="Удалять накопленные updates при старте бота"
     )
     
     TIMEZONE: str = Field(
@@ -235,6 +255,20 @@ class Settings(BaseSettings):
     )
     
     # ========================================================================
+    # HELPER PROPERTIES (алиасы для обратной совместимости)
+    # ========================================================================
+    
+    @property
+    def BOT_TOKEN(self) -> str:
+        """Алиас для TELEGRAM_BOT_TOKEN (обратная совместимость)."""
+        return self.TELEGRAM_BOT_TOKEN
+    
+    @property
+    def is_debug(self) -> bool:
+        """Проверка debug режима на основе APP_ENV."""
+        return self.APP_ENV == "development"
+    
+    # ========================================================================
     # VALIDATORS
     # ========================================================================
     
@@ -247,6 +281,16 @@ class Settings(BaseSettings):
         if v_upper not in allowed_levels:
             raise ValueError(f"LOG_LEVEL must be one of {allowed_levels}")
         return v_upper
+    
+    @field_validator('APP_ENV')
+    @classmethod
+    def validate_app_env(cls, v: str) -> str:
+        """Валидация окружения приложения."""
+        allowed_envs = ['development', 'staging', 'production']
+        v_lower = v.lower()
+        if v_lower not in allowed_envs:
+            raise ValueError(f"APP_ENV must be one of {allowed_envs}")
+        return v_lower
     
     @field_validator('DATABASE_URL')
     @classmethod
@@ -309,9 +353,18 @@ class Settings(BaseSettings):
         Проверяет, запущено ли приложение в production режиме.
         
         Returns:
-            bool: True если production (DEBUG=False)
+            bool: True если production (APP_ENV='production')
         """
-        return not self.DEBUG
+        return self.APP_ENV == "production"
+    
+    def is_development(self) -> bool:
+        """
+        Проверяет, запущено ли приложение в development режиме.
+        
+        Returns:
+            bool: True если development (APP_ENV='development')
+        """
+        return self.APP_ENV == "development"
     
     def get_log_config(self) -> dict:
         """
@@ -337,7 +390,7 @@ class Settings(BaseSettings):
                 'console': {
                     'class': 'logging.StreamHandler',
                     'level': self.LOG_LEVEL,
-                    'formatter': 'detailed' if self.DEBUG else 'default',
+                    'formatter': 'detailed' if self.is_development() else 'default',
                     'stream': 'ext://sys.stdout',
                 },
             },
@@ -474,6 +527,10 @@ def validate_settings() -> tuple[bool, list[str]]:
         
         if settings.DEFAULT_PAGE_SIZE > settings.MAX_PAGE_SIZE:
             errors.append("DEFAULT_PAGE_SIZE cannot be greater than MAX_PAGE_SIZE")
+        
+        # Проверка APP_ENV
+        if settings.APP_ENV not in ['development', 'staging', 'production']:
+            errors.append(f"Invalid APP_ENV: {settings.APP_ENV}")
         
     except Exception as e:
         errors.append(f"Validation error: {str(e)}")
