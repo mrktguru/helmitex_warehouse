@@ -1,499 +1,127 @@
 """
-Клавиатуры для Telegram бота Helmitex Warehouse.
+Клавиатуры для Telegram бота Helmitex Warehouse (aiogram 3.x).
 
 Все инлайн-клавиатуры для навигации и выбора опций.
 Централизованное управление UI элементами.
 """
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from typing import List, Optional
-from app.config import OWNER_TELEGRAM_ID
 
 
 # ============================================================================
 # ГЛАВНОЕ МЕНЮ
 # ============================================================================
 
-def get_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(user=None) -> InlineKeyboardMarkup:
     """
     Главное меню с учетом прав пользователя.
     
     Args:
-        user_id: Telegram ID пользователя
+        user: Объект User из БД (с правами доступа)
         
     Returns:
         InlineKeyboardMarkup: Клавиатура главного меню
     """
-    keyboard = [
-        [
-            InlineKeyboardButton("📥 Приход сырья", callback_data="arrival_menu"),
-            InlineKeyboardButton("⚙️ Производство", callback_data="production_menu")
-        ],
-        [
-            InlineKeyboardButton("📦 Фасовка", callback_data="packing_menu"),
-            InlineKeyboardButton("🚚 Отгрузка", callback_data="shipment_menu")
-        ],
-        [
-            InlineKeyboardButton("📊 Остатки", callback_data="stock_menu"),
-            InlineKeyboardButton("📈 История", callback_data="history_menu")
-        ]
-    ]
+    buttons = []
     
-    # Кнопка администрирования только для владельца
-    if user_id == OWNER_TELEGRAM_ID:
-        keyboard.append([
-            InlineKeyboardButton("⚙️ АДМИНИСТРИРОВАНИЕ", callback_data="admin_menu")
-        ])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ПРИХОД СЫРЬЯ
-# ============================================================================
-
-def get_arrival_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню раздела прихода сырья."""
-    keyboard = [
-        [InlineKeyboardButton("➕ Оформить приход", callback_data="arrival_start")],
-        [InlineKeyboardButton("📋 История прихода", callback_data="history_arrival")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_category_keyboard() -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора категории сырья.
-    """
-    keyboard = [
-        [InlineKeyboardButton("🌾 Загустители", callback_data="category_thickeners")],
-        [InlineKeyboardButton("🎨 Красители", callback_data="category_colorants")],
-        [InlineKeyboardButton("🌸 Отдушки", callback_data="category_fragrances")],
-        [InlineKeyboardButton("🧪 Основы", callback_data="category_bases")],
-        [InlineKeyboardButton("➕ Добавки", callback_data="category_additives")],
-        [InlineKeyboardButton("📦 Упаковка", callback_data="category_packaging")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="arrival_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_raw_materials_keyboard(raw_materials: List, page: int = 0, page_size: int = 8) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора сырья с пагинацией.
-    
-    Args:
-        raw_materials: Список объектов SKU (сырье)
-        page: Номер страницы (начиная с 0)
-        page_size: Количество элементов на странице
+    if user:
+        # Операционные кнопки
+        if user.can_receive_materials:
+            buttons.append([InlineKeyboardButton(
+                text="📥 Приемка сырья",
+                callback_data="arrival_start"
+            )])
         
-    Returns:
-        InlineKeyboardMarkup: Клавиатура с сырьем
-    """
-    keyboard = []
-    
-    # Вычисляем границы страницы
-    start_idx = page * page_size
-    end_idx = start_idx + page_size
-    page_items = raw_materials[start_idx:end_idx]
-    
-    # Кнопки с сырьем
-    for material in page_items:
-        button_text = f"{material.name}"
-        if hasattr(material, 'stock') and material.stock:
-            # Если есть информация об остатке
-            stock_qty = material.stock[0].quantity if material.stock else 0
-            button_text += f" ({stock_qty} {material.unit.value})"
+        if user.can_produce:
+            buttons.append([InlineKeyboardButton(
+                text="🏭 Производство",
+                callback_data="production_start"
+            )])
         
-        keyboard.append([
-            InlineKeyboardButton(button_text, callback_data=f"raw_material_{material.id}")
-        ])
-    
-    # Кнопки пагинации
-    pagination_row = []
-    if page > 0:
-        pagination_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"raw_page_{page-1}"))
-    if end_idx < len(raw_materials):
-        pagination_row.append(InlineKeyboardButton("➡️ Вперед", callback_data=f"raw_page_{page+1}"))
-    
-    if pagination_row:
-        keyboard.append(pagination_row)
-    
-    # Кнопки управления
-    keyboard.append([InlineKeyboardButton("➕ Добавить новое сырье", callback_data="admin_add_raw_material")])
-    keyboard.append([InlineKeyboardButton("🔙 К категориям", callback_data="arrival_select_category")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="arrival_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ПРОИЗВОДСТВО
-# ============================================================================
-
-def get_production_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню раздела производства."""
-    keyboard = [
-        [InlineKeyboardButton("⚙️ Начать замес", callback_data="production_start")],
-        [InlineKeyboardButton("📋 История производства", callback_data="history_production")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_recipes_keyboard(recipes: List, show_status: bool = False) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора технологической карты.
-    
-    Args:
-        recipes: Список объектов TechnologicalCard
-        show_status: Показывать ли статус рецепта
+        if user.can_pack:
+            buttons.append([InlineKeyboardButton(
+                text="📦 Фасовка",
+                callback_data="packing_start"
+            )])
         
-    Returns:
-        InlineKeyboardMarkup: Клавиатура с рецептами
-    """
-    keyboard = []
-    
-    for recipe in recipes:
-        button_text = f"📋 {recipe.name}"
-        if show_status:
-            status_emoji = {
-                'draft': '📝',
-                'active': '✅',
-                'archived': '📦'
-            }
-            button_text += f" {status_emoji.get(recipe.status.value, '')}"
-        else:
-            button_text += f" (выход: {recipe.yield_percent}%)"
+        if user.can_ship:
+            buttons.append([InlineKeyboardButton(
+                text="🚚 Отгрузка",
+                callback_data="shipment_start"
+            )])
         
-        keyboard.append([
-            InlineKeyboardButton(button_text, callback_data=f"recipe_{recipe.id}")
-        ])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="production_menu")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="main_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_production_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения производства."""
-    keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить и начать", callback_data="production_confirm")],
-        [InlineKeyboardButton("✏️ Изменить вес", callback_data="production_change_weight")],
-        [InlineKeyboardButton("🔄 Пересчитать", callback_data="production_recalculate")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="production_cancel")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ФАСОВКА
-# ============================================================================
-
-def get_packing_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню раздела фасовки."""
-    keyboard = [
-        [InlineKeyboardButton("📦 Начать фасовку", callback_data="packing_start")],
-        [InlineKeyboardButton("📋 История фасовки", callback_data="history_packing")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_semi_products_keyboard(semi_products: List) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора полуфабриката для фасовки.
-    
-    Args:
-        semi_products: Список объектов SKU (type='semi')
+        # Информационные кнопки (доступны всем)
+        buttons.append([InlineKeyboardButton(
+            text="📊 Остатки",
+            callback_data="stock_start"
+        )])
         
-    Returns:
-        InlineKeyboardMarkup: Клавиатура с полуфабрикатами
-    """
-    keyboard = []
-    
-    for semi in semi_products:
-        # Получаем общий остаток полуфабриката
-        total_weight = 0
-        if hasattr(semi, 'stock') and semi.stock:
-            total_weight = semi.stock[0].quantity if semi.stock else 0
+        buttons.append([InlineKeyboardButton(
+            text="📜 История",
+            callback_data="history_start"
+        )])
         
-        button_text = f"⚙️ {semi.name} ({total_weight} {semi.unit.value})"
-        keyboard.append([
-            InlineKeyboardButton(button_text, callback_data=f"semi_product_{semi.id}")
-        ])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="packing_menu")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="main_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_finished_products_keyboard(finished_products: List, semi_product_id: int) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора готовой продукции для фасовки.
-    
-    Args:
-        finished_products: Список объектов SKU (type='finished')
-        semi_product_id: ID выбранного полуфабриката
+        # Административная кнопка
+        if user.is_admin:
+            buttons.append([InlineKeyboardButton(
+                text="👨‍💼 Администрирование",
+                callback_data="admin_start"
+            )])
         
-    Returns:
-        InlineKeyboardMarkup: Клавиатура с готовой продукцией
-    """
-    keyboard = []
+        # Справка
+        buttons.append([InlineKeyboardButton(
+            text="❓ Справка",
+            callback_data="help"
+        )])
+    else:
+        # Меню для незарегистрированного пользователя
+        buttons.append([InlineKeyboardButton(
+            text="📖 Справка",
+            callback_data="help"
+        )])
     
-    for product in finished_products:
-        button_text = f"📦 {product.name}"
-        keyboard.append([
-            InlineKeyboardButton(button_text, callback_data=f"finished_product_{product.id}")
-        ])
-    
-    keyboard.append([
-        InlineKeyboardButton("➕ Создать новую упаковку", callback_data=f"create_packing_variant_{semi_product_id}")
-    ])
-    keyboard.append([InlineKeyboardButton("🔙 К выбору полуфабриката", callback_data="packing_start")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="packing_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_packing_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения фасовки."""
-    keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить фасовку", callback_data="packing_confirm")],
-        [InlineKeyboardButton("✏️ Изменить количество", callback_data="packing_change_quantity")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="packing_cancel")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ОТГРУЗКА
-# ============================================================================
-
-def get_shipment_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню раздела отгрузки."""
-    keyboard = [
-        [InlineKeyboardButton("🚚 Оформить отгрузку", callback_data="shipment_start")],
-        [InlineKeyboardButton("📋 История отгрузок", callback_data="history_shipment")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_finished_products_for_shipment_keyboard(finished_products: List) -> InlineKeyboardMarkup:
-    """
-    Клавиатура выбора готовой продукции для отгрузки.
-    
-    Args:
-        finished_products: Список объектов SKU с остатками
-        
-    Returns:
-        InlineKeyboardMarkup: Клавиатура с готовой продукцией
-    """
-    keyboard = []
-    
-    for product in finished_products:
-        stock_qty = 0
-        if hasattr(product, 'stock') and product.stock:
-            stock_qty = product.stock[0].quantity if product.stock else 0
-        
-        button_text = f"📦 {product.name} ({stock_qty} {product.unit.value})"
-        keyboard.append([
-            InlineKeyboardButton(button_text, callback_data=f"shipment_product_{product.id}")
-        ])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="shipment_menu")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="main_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_shipment_recipient_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора получателя (опционально)."""
-    keyboard = [
-        [InlineKeyboardButton("✏️ Ввести получателя", callback_data="shipment_enter_recipient")],
-        [InlineKeyboardButton("⏭️ Пропустить", callback_data="shipment_skip_recipient")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="shipment_cancel")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_shipment_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения отгрузки."""
-    keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить отгрузку", callback_data="shipment_confirm")],
-        [InlineKeyboardButton("✏️ Изменить количество", callback_data="shipment_change_quantity")],
-        [InlineKeyboardButton("👤 Изменить получателя", callback_data="shipment_change_recipient")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="shipment_cancel")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ОСТАТКИ
-# ============================================================================
-
-def get_stock_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню просмотра остатков."""
-    keyboard = [
-        [InlineKeyboardButton("🌾 Сырье", callback_data="stock_raw")],
-        [InlineKeyboardButton("⚙️ Полуфабрикаты", callback_data="stock_semi")],
-        [InlineKeyboardButton("📦 Готовая продукция", callback_data="stock_finished")],
-        [
-            InlineKeyboardButton("⚠️ Низкие остатки", callback_data="stock_low"),
-            InlineKeyboardButton("📊 Все товары", callback_data="stock_all")
-        ],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_stock_category_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура фильтра по категориям сырья."""
-    keyboard = [
-        [InlineKeyboardButton("🌾 Загустители", callback_data="stock_category_thickeners")],
-        [InlineKeyboardButton("🎨 Красители", callback_data="stock_category_colorants")],
-        [InlineKeyboardButton("🌸 Отдушки", callback_data="stock_category_fragrances")],
-        [InlineKeyboardButton("🧪 Основы", callback_data="stock_category_bases")],
-        [InlineKeyboardButton("➕ Добавки", callback_data="stock_category_additives")],
-        [InlineKeyboardButton("📦 Упаковка", callback_data="stock_category_packaging")],
-        [InlineKeyboardButton("📊 Все сырье", callback_data="stock_raw")],
-        [InlineKeyboardButton("🔙 К остаткам", callback_data="stock_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# ИСТОРИЯ
-# ============================================================================
-
-def get_history_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню истории операций."""
-    keyboard = [
-        [InlineKeyboardButton("📥 Приход сырья", callback_data="history_arrival")],
-        [InlineKeyboardButton("⚙️ Производство", callback_data="history_production")],
-        [InlineKeyboardButton("📦 Фасовка", callback_data="history_packing")],
-        [InlineKeyboardButton("🚚 Отгрузка", callback_data="history_shipment")],
-        [InlineKeyboardButton("📊 Все операции", callback_data="history_all")],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_history_detail_keyboard(movement_id: int, back_type: str = "all") -> InlineKeyboardMarkup:
-    """
-    Клавиатура детального просмотра операции.
-    
-    Args:
-        movement_id: ID движения
-        back_type: Тип истории для кнопки "Назад"
-        
-    Returns:
-        InlineKeyboardMarkup: Клавиатура
-    """
-    keyboard = [
-        [InlineKeyboardButton("🔙 К списку", callback_data=f"history_{back_type}")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================================
-# АДМИНИСТРИРОВАНИЕ
-# ============================================================================
-
-def get_admin_menu_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню администратора."""
-    keyboard = [
-        [
-            InlineKeyboardButton("📦 Номенклатура", callback_data="admin_sku_menu"),
-            InlineKeyboardButton("📋 Технологические карты", callback_data="admin_recipes_menu")
-        ],
-        [
-            InlineKeyboardButton("🏢 Склады", callback_data="admin_warehouses_menu"),
-            InlineKeyboardButton("👥 Пользователи", callback_data="admin_users_menu")
-        ],
-        [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_admin_sku_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню управления номенклатурой."""
-    keyboard = [
-        [InlineKeyboardButton("🌾 Сырье", callback_data="admin_raw_materials")],
-        [InlineKeyboardButton("⚙️ Полуфабрикаты", callback_data="admin_semi_products")],
-        [InlineKeyboardButton("📦 Готовая продукция", callback_data="admin_finished_products")],
-        [InlineKeyboardButton("➕ Добавить SKU", callback_data="admin_add_sku_start")],
-        [InlineKeyboardButton("🔙 К администрированию", callback_data="admin_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_admin_recipes_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню управления технологическими картами."""
-    keyboard = [
-        [InlineKeyboardButton("✅ Активные ТК", callback_data="admin_recipes_active")],
-        [InlineKeyboardButton("📝 Черновики", callback_data="admin_recipes_drafts")],
-        [InlineKeyboardButton("📦 Архив", callback_data="admin_recipes_archived")],
-        [InlineKeyboardButton("➕ Создать ТК", callback_data="admin_recipe_create_start")],
-        [InlineKeyboardButton("🔙 К администрированию", callback_data="admin_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_admin_recipe_actions_keyboard(recipe_id: int, status: str) -> InlineKeyboardMarkup:
-    """
-    Клавиатура действий с технологической картой.
-    
-    Args:
-        recipe_id: ID рецепта
-        status: Статус рецепта ('draft', 'active', 'archived')
-        
-    Returns:
-        InlineKeyboardMarkup: Клавиатура действий
-    """
-    keyboard = []
-    
-    if status == 'draft':
-        keyboard.append([InlineKeyboardButton("✅ Активировать", callback_data=f"admin_recipe_activate_{recipe_id}")])
-    elif status == 'active':
-        keyboard.append([InlineKeyboardButton("📦 Архивировать", callback_data=f"admin_recipe_archive_{recipe_id}")])
-    elif status == 'archived':
-        keyboard.append([InlineKeyboardButton("🔄 Восстановить", callback_data=f"admin_recipe_activate_{recipe_id}")])
-    
-    keyboard.append([InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_recipe_edit_{recipe_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 К списку ТК", callback_data="admin_recipes_menu")])
-    
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ============================================================================
 # ОБЩИЕ КЛАВИАТУРЫ
 # ============================================================================
 
-def get_confirmation_keyboard(confirm_data: str, cancel_data: str = "cancel") -> InlineKeyboardMarkup:
+def get_cancel_keyboard() -> InlineKeyboardMarkup:
+    """Универсальная кнопка "Отмена"."""
+    keyboard = [
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_confirmation_keyboard(
+    confirm_callback: str = "confirm",
+    cancel_callback: str = "cancel"
+) -> InlineKeyboardMarkup:
     """
     Универсальная клавиатура подтверждения.
     
     Args:
-        confirm_data: callback_data для кнопки подтверждения
-        cancel_data: callback_data для кнопки отмены
+        confirm_callback: callback_data для кнопки подтверждения
+        cancel_callback: callback_data для кнопки отмены
         
     Returns:
         InlineKeyboardMarkup: Клавиатура подтверждения
     """
     keyboard = [
         [
-            InlineKeyboardButton("✅ Подтвердить", callback_data=confirm_data),
-            InlineKeyboardButton("❌ Отмена", callback_data=cancel_data)
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=confirm_callback),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_callback)
         ]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_back_button(callback_data: str = "main_menu", text: str = "🔙 Назад") -> InlineKeyboardMarkup:
+def get_back_keyboard(
+    callback_data: str = "main_menu",
+    text: str = "🔙 Назад"
+) -> InlineKeyboardMarkup:
     """
     Универсальная кнопка "Назад".
     
@@ -504,64 +132,334 @@ def get_back_button(callback_data: str = "main_menu", text: str = "🔙 Наза
     Returns:
         InlineKeyboardMarkup: Клавиатура с кнопкой назад
     """
-    keyboard = [[InlineKeyboardButton(text, callback_data=callback_data)]]
-    return InlineKeyboardMarkup(keyboard)
+    keyboard = [
+        [InlineKeyboardButton(text=text, callback_data=callback_data)]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_cancel_button(callback_data: str = "cancel") -> InlineKeyboardMarkup:
+# ============================================================================
+# СКЛАДЫ
+# ============================================================================
+
+def get_warehouses_keyboard(
+    warehouses: List,
+    callback_prefix: str = "warehouse",
+    show_status: bool = True
+) -> InlineKeyboardMarkup:
     """
-    Универсальная кнопка "Отмена".
+    Клавиатура выбора склада.
     
     Args:
-        callback_data: callback_data для кнопки
+        warehouses: Список объектов Warehouse
+        callback_prefix: Префикс для callback_data
+        show_status: Показывать ли статус склада
         
     Returns:
-        InlineKeyboardMarkup: Клавиатура с кнопкой отмены
+        InlineKeyboardMarkup: Клавиатура со складами
     """
-    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=callback_data)]]
-    return InlineKeyboardMarkup(keyboard)
+    buttons = []
+    
+    for warehouse in warehouses:
+        text = warehouse.name
+        if show_status:
+            status = "✅" if warehouse.is_active else "🔒"
+            text = f"{status} {text}"
+        
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"{callback_prefix}_{warehouse.id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="❌ Отмена",
+        callback_data="cancel"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_back_and_cancel_keyboard(back_data: str, cancel_data: str = "cancel") -> InlineKeyboardMarkup:
+# ============================================================================
+# НОМЕНКЛАТУРА (SKU)
+# ============================================================================
+
+def get_sku_keyboard(
+    skus: List,
+    callback_prefix: str = "sku",
+    show_stock: bool = False,
+    warehouse_id: Optional[int] = None
+) -> InlineKeyboardMarkup:
     """
-    Клавиатура с кнопками "Назад" и "Отмена".
+    Клавиатура выбора SKU.
     
     Args:
-        back_data: callback_data для кнопки "Назад"
-        cancel_data: callback_data для кнопки "Отмена"
+        skus: Список объектов SKU
+        callback_prefix: Префикс для callback_data
+        show_stock: Показывать ли остатки
+        warehouse_id: ID склада для показа остатков
         
     Returns:
-        InlineKeyboardMarkup: Клавиатура
+        InlineKeyboardMarkup: Клавиатура с SKU
     """
-    keyboard = [
-        [
-            InlineKeyboardButton("🔙 Назад", callback_data=back_data),
-            InlineKeyboardButton("❌ Отмена", callback_data=cancel_data)
-        ]
+    buttons = []
+    
+    for sku in skus:
+        text = sku.name
+        
+        if show_stock and hasattr(sku, 'stock') and sku.stock:
+            # Если есть информация об остатках
+            stock_qty = 0
+            if warehouse_id:
+                # Фильтруем по складу
+                for stock in sku.stock:
+                    if stock.warehouse_id == warehouse_id:
+                        stock_qty = stock.quantity
+                        break
+            else:
+                # Общий остаток
+                stock_qty = sum(s.quantity for s in sku.stock)
+            
+            text += f" ({stock_qty} {sku.unit})"
+        
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"{callback_prefix}_{sku.id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="❌ Отмена",
+        callback_data="cancel"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================================
+# РЕЦЕПТЫ
+# ============================================================================
+
+def get_recipes_keyboard(
+    recipes: List,
+    callback_prefix: str = "recipe",
+    show_status: bool = False
+) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора технологической карты.
+    
+    Args:
+        recipes: Список объектов TechnologicalCard
+        callback_prefix: Префикс для callback_data
+        show_status: Показывать ли статус рецепта
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с рецептами
+    """
+    buttons = []
+    
+    for recipe in recipes:
+        text = f"📋 {recipe.name}"
+        
+        if show_status:
+            status_emoji = {
+                'draft': '📝',
+                'active': '✅',
+                'archived': '📦'
+            }
+            text += f" {status_emoji.get(recipe.status.value, '')}"
+        else:
+            text += f" (выход: {recipe.yield_percent}%)"
+        
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"{callback_prefix}_{recipe.id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="❌ Отмена",
+        callback_data="cancel"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================================
+# ПОЛУЧАТЕЛИ
+# ============================================================================
+
+def get_recipients_keyboard(
+    recipients: List,
+    callback_prefix: str = "recipient",
+    show_contact: bool = False
+) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора получателя (клиента).
+    
+    Args:
+        recipients: Список объектов Recipient
+        callback_prefix: Префикс для callback_data
+        show_contact: Показывать ли контактную информацию
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с получателями
+    """
+    buttons = []
+    
+    for recipient in recipients:
+        text = f"👤 {recipient.name}"
+        
+        if show_contact and recipient.contact_info:
+            # Обрезаем длинный контакт
+            contact = recipient.contact_info[:20] + "..." if len(recipient.contact_info) > 20 else recipient.contact_info
+            text += f" ({contact})"
+        
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"{callback_prefix}_{recipient.id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="❌ Отмена",
+        callback_data="cancel"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================================
+# ВАРИАНТЫ УПАКОВКИ
+# ============================================================================
+
+def get_packing_variants_keyboard(
+    variants: List,
+    callback_prefix: str = "packing_variant"
+) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора варианта упаковки.
+    
+    Args:
+        variants: Список объектов PackingVariant
+        callback_prefix: Префикс для callback_data
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с вариантами упаковки
+    """
+    buttons = []
+    
+    for variant in variants:
+        container_emoji = {
+            'bucket': '🪣',
+            'can': '🥫',
+            'bag': '👜',
+            'bottle': '🍾',
+            'other': '📦'
+        }
+        
+        emoji = container_emoji.get(variant.container_type.value, '📦')
+        text = f"{emoji} {variant.finished_product.name} ({variant.weight_per_unit} кг)"
+        
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"{callback_prefix}_{variant.id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="❌ Отмена",
+        callback_data="cancel"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================================
+# КАТЕГОРИИ СЫРЬЯ
+# ============================================================================
+
+def get_category_keyboard(callback_prefix: str = "category") -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора категории сырья.
+    
+    Args:
+        callback_prefix: Префикс для callback_data
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с категориями
+    """
+    buttons = [
+        [InlineKeyboardButton(text="🌾 Загустители", callback_data=f"{callback_prefix}_thickeners")],
+        [InlineKeyboardButton(text="🎨 Красители", callback_data=f"{callback_prefix}_colorants")],
+        [InlineKeyboardButton(text="🌸 Отдушки", callback_data=f"{callback_prefix}_fragrances")],
+        [InlineKeyboardButton(text="🧪 Основы", callback_data=f"{callback_prefix}_bases")],
+        [InlineKeyboardButton(text="➕ Добавки", callback_data=f"{callback_prefix}_additives")],
+        [InlineKeyboardButton(text="📦 Упаковка", callback_data=f"{callback_prefix}_packaging")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_unit_selection_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора единицы измерения."""
-    keyboard = [
-        [InlineKeyboardButton("кг (килограммы)", callback_data="unit_kg")],
-        [InlineKeyboardButton("л (литры)", callback_data="unit_liters")],
-        [InlineKeyboardButton("г (граммы)", callback_data="unit_grams")],
-        [InlineKeyboardButton("шт (штуки)", callback_data="unit_pieces")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="admin_sku_menu")]
+# ============================================================================
+# ЕДИНИЦЫ ИЗМЕРЕНИЯ
+# ============================================================================
+
+def get_unit_keyboard(callback_prefix: str = "unit") -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора единицы измерения.
+    
+    Args:
+        callback_prefix: Префикс для callback_data
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с единицами измерения
+    """
+    buttons = [
+        [InlineKeyboardButton(text="кг (килограммы)", callback_data=f"{callback_prefix}_kg")],
+        [InlineKeyboardButton(text="л (литры)", callback_data=f"{callback_prefix}_liters")],
+        [InlineKeyboardButton(text="г (граммы)", callback_data=f"{callback_prefix}_grams")],
+        [InlineKeyboardButton(text="шт (штуки)", callback_data=f"{callback_prefix}_pieces")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_container_type_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа тары."""
-    keyboard = [
-        [InlineKeyboardButton("🪣 Ведро", callback_data="container_bucket")],
-        [InlineKeyboardButton("🥫 Банка", callback_data="container_can")],
-        [InlineKeyboardButton("👜 Мешок", callback_data="container_bag")],
-        [InlineKeyboardButton("🍾 Бутылка", callback_data="container_bottle")],
-        [InlineKeyboardButton("📦 Другое", callback_data="container_other")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+# ============================================================================
+# ТИПЫ ТАРЫ
+# ============================================================================
+
+def get_container_type_keyboard(callback_prefix: str = "container") -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора типа тары.
+    
+    Args:
+        callback_prefix: Префикс для callback_data
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с типами тары
+    """
+    buttons = [
+        [InlineKeyboardButton(text="🪣 Ведро", callback_data=f"{callback_prefix}_bucket")],
+        [InlineKeyboardButton(text="🥫 Банка", callback_data=f"{callback_prefix}_can")],
+        [InlineKeyboardButton(text="👜 Мешок", callback_data=f"{callback_prefix}_bag")],
+        [InlineKeyboardButton(text="🍾 Бутылка", callback_data=f"{callback_prefix}_bottle")],
+        [InlineKeyboardButton(text="📦 Другое", callback_data=f"{callback_prefix}_other")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================================
+# ЭКСПОРТ
+# ============================================================================
+
+__all__ = [
+    'get_main_menu_keyboard',
+    'get_cancel_keyboard',
+    'get_confirmation_keyboard',
+    'get_back_keyboard',
+    'get_warehouses_keyboard',
+    'get_sku_keyboard',
+    'get_recipes_keyboard',
+    'get_recipients_keyboard',
+    'get_packing_variants_keyboard',
+    'get_category_keyboard',
+    'get_unit_keyboard',
+    'get_container_type_keyboard',
+]
