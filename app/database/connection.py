@@ -46,16 +46,17 @@ def create_engine() -> AsyncEngine:
     sqlalchemy_config = settings.get_sqlalchemy_config()
     
     # Определяем класс пула в зависимости от окружения
-    # В тестовом окружении используем NullPool (без пула)
-    pool_class = NullPool if settings.APP_ENV == "test" else QueuePool
+    # В debug режиме используем NullPool (без пула) для тестирования
+    pool_class = NullPool if settings.DEBUG else QueuePool
     
     return create_async_engine(
         settings.DATABASE_URL,
         echo=sqlalchemy_config["echo"],  # Логирование SQL в dev режиме
-        pool_size=sqlalchemy_config["pool_size"],  # Размер пула соединений (по умолчанию 20)
-        max_overflow=sqlalchemy_config["max_overflow"],  # Доп. соединения сверх pool_size (по умолчанию 10)
-        pool_pre_ping=True,  # Проверка соединения перед использованием
-        pool_recycle=3600,  # Переиспользование соединений каждый час
+        pool_size=sqlalchemy_config["pool_size"],  # Размер пула соединений
+        max_overflow=sqlalchemy_config["max_overflow"],  # Доп. соединения сверх pool_size
+        pool_pre_ping=sqlalchemy_config["pool_pre_ping"],  # Проверка соединения перед использованием
+        pool_timeout=sqlalchemy_config["pool_timeout"],  # Таймаут ожидания соединения
+        pool_recycle=sqlalchemy_config["pool_recycle"],  # Переиспользование соединений
         poolclass=pool_class,  # Класс пула соединений
         future=True,  # Использование SQLAlchemy 2.0 style API
     )
@@ -101,9 +102,7 @@ async def init_db() -> None:
     # Логируем успешное подключение
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(
-        f"✅ База данных инициализирована: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-    )
+    logger.info("✅ База данных инициализирована")
 
 
 async def close_db() -> None:
