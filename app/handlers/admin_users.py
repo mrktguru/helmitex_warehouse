@@ -1026,3 +1026,8 @@ async def cancel_users_admin(event: Union[Message, CallbackQuery], state: FSMCon
         await message.edit_text(text, parse_mode='HTML')
     else:
         await message.answer(text, reply_markup=get_main_menu_keyboard(), parse_mode='HTML')
+
+
+
+__all__ = ['router']
+
