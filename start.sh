@@ -18,4 +18,4 @@ echo "Initializing database tables..."
 export PYTHONPATH=/app:$PYTHONPATH
 
 echo "Starting Telegram bot..."
-cd /app && python -m app.bot
+cd /app && python main.py
