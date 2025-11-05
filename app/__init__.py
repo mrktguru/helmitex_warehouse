@@ -14,7 +14,6 @@ Helmitex Warehouse - Telegram бот для складского учета.
 __version__ = "1.0.1"
 __author__ = "Helmitex Team"
 
-# ✅ ИСПРАВЛЕННЫЙ ИМПОРТ - через settings объект
 from .config import settings
 
 # Экспорт для совместимости
