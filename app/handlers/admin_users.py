@@ -7,17 +7,20 @@
 - Управления правами доступа
 - Просмотра статистики пользователей
 - Блокировки/разблокировки пользователей
+
+Конвертировано на aiogram 3.x с использованием FSM (StatesGroup).
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
+from typing import Union
 
 from app.database.models import (
     User, Movement, ProductionBatch, Shipment
@@ -30,58 +33,70 @@ from app.utils.keyboards import (
 from app.validators.input_validators import validate_text_length
 
 
-# Состояния диалога
-(
-    USERS_MENU,
-    LIST_USERS,
-    SEARCH_USER_INPUT,
-    VIEW_USER_DETAILS,
-    MANAGE_PERMISSIONS,
-    TOGGLE_PERMISSION,
-    CONFIRM_PERMISSION_CHANGE,
-    VIEW_USER_STATISTICS,
-    BLOCK_USER_REASON,
-    CONFIRM_BLOCK_USER,
-    CONFIRM_UNBLOCK_USER
-) = range(11)
+# ============================================================================
+# FSM СОСТОЯНИЯ
+# ============================================================================
+
+class AdminUsersStates(StatesGroup):
+    """Состояния FSM для управления пользователями."""
+    users_menu = State()              # Главное меню управления пользователями
+    list_users = State()              # Список пользователей
+    search_user_input = State()       # Ввод для поиска пользователя
+    view_user_details = State()       # Детали пользователя
+    manage_permissions = State()      # Управление правами
+    toggle_permission = State()       # Переключение права
+    confirm_permission_change = State()  # Подтверждение изменения права
+    view_user_statistics = State()    # Статистика пользователя
+    block_user_reason = State()       # Ввод причины блокировки
+    confirm_block_user = State()      # Подтверждение блокировки
+    confirm_unblock_user = State()    # Подтверждение разблокировки
+
+
+# ============================================================================
+# РОУТЕР
+# ============================================================================
+
+router = Router(name='admin_users')
 
 
 # ============================================================================
 # МЕНЮ УПРАВЛЕНИЯ ПОЛЬЗОВАТЕЛЯМИ
 # ============================================================================
 
-async def users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(Command('users_admin'))
+@router.callback_query(F.data == 'admin_users')
+async def users_menu(
+    event: Union[Message, CallbackQuery],
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает главное меню управления пользователями.
     
     Доступно из /admin -> "Пользователи"
     """
-    query = update.callback_query
-    
-    if query:
-        await query.answer()
-        message = query.message
+    # Определение типа события
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
+        user_id = event.from_user.id
     else:
-        message = update.message
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+        message = event
+        user_id = event.from_user.id
     
     # Получение пользователя
-    user_id = update.effective_user.id
     user = await session.get(User, user_id)
     
     if not user or not user.is_admin:
-        await message.reply_text(
-            "❌ У вас нет административных прав."
-        )
-        return ConversationHandler.END
+        await message.answer("❌ У вас нет административных прав.")
+        await state.clear()
+        return
     
     # Инициализация данных
-    context.user_data['admin_users'] = {
-        'admin_id': user_id,
-        'started_at': datetime.utcnow()
-    }
+    await state.update_data(
+        admin_id=user_id,
+        started_at=datetime.utcnow().isoformat()
+    )
     
     # Статистика пользователей
     try:
@@ -102,11 +117,11 @@ async def users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except:
         stats_text = ""
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Список пользователей", callback_data='users_list')],
-        [InlineKeyboardButton("🔍 Найти пользователя", callback_data='users_search')],
-        [InlineKeyboardButton("🔙 Назад к админке", callback_data='admin_start')],
-        [InlineKeyboardButton("❌ Выход", callback_data='users_exit')]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Список пользователей", callback_data='users_list')],
+        [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data='users_search')],
+        [InlineKeyboardButton(text="🔙 Назад к админке", callback_data='admin_start')],
+        [InlineKeyboardButton(text="❌ Выход", callback_data='users_exit')]
     ])
     
     text = (
@@ -115,27 +130,24 @@ async def users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Выберите действие:"
     )
     
-    if query:
-        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    if isinstance(event, CallbackQuery):
+        await message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
     else:
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
     
-    return USERS_MENU
+    await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # СПИСОК ПОЛЬЗОВАТЕЛЕЙ
 # ============================================================================
 
-async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.users_menu, F.data == 'users_list')
+async def list_users(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает список всех пользователей.
     """
-    query = update.callback_query
     await query.answer("⏳ Загрузка пользователей...")
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
     
     try:
         # Получение пользователей
@@ -149,8 +161,8 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "❌ Нет зарегистрированных пользователей."
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='users_menu')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='users_menu')]
             ])
         else:
             text = f"📋 <b>Список пользователей ({len(users)})</b>\n\n"
@@ -191,34 +203,34 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "📦 - Фасовка | 🚚 - Отгрузка\n"
             )
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔍 Найти пользователя", callback_data='users_search')],
-                [InlineKeyboardButton("🔙 Назад", callback_data='users_menu')]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data='users_search')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='users_menu')]
             ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return LIST_USERS
+        await state.set_state(AdminUsersStates.list_users)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка при загрузке пользователей: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # ПОИСК ПОЛЬЗОВАТЕЛЯ
 # ============================================================================
 
-async def search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.users_menu, F.data == 'users_search')
+@router.callback_query(AdminUsersStates.list_users, F.data == 'users_search')
+async def search_user_start(query: CallbackQuery, state: FSMContext) -> None:
     """
     Запрашивает ввод для поиска пользователя.
     """
-    query = update.callback_query
     await query.answer()
     
     text = (
@@ -233,18 +245,15 @@ async def search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode='HTML'
     )
     
-    return SEARCH_USER_INPUT
+    await state.set_state(AdminUsersStates.search_user_input)
 
 
-async def search_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminUsersStates.search_user_input, F.text)
+async def search_user_input(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает поиск пользователя.
     """
-    message = update.message
     user_input = message.text.strip()
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
     
     try:
         # Поиск пользователя
@@ -267,64 +276,140 @@ async def search_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             found_user = await session.scalar(stmt)
         
         if not found_user:
-            await message.reply_text(
+            await message.answer(
                 f"❌ Пользователь '{user_input}' не найден.\n\n"
                 "Попробуйте другой запрос:",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
                 ])
             )
-            return SEARCH_USER_INPUT
+            return
         
         # Сохранение найденного пользователя
-        context.user_data['admin_users']['selected_user_id'] = found_user.id
+        await state.update_data(selected_user_id=found_user.id)
         
         # Показ деталей
-        return await view_user_details(update, context, found_user)
+        await view_user_details_from_message(message, state, session, found_user)
         
     except Exception as e:
-        await message.reply_text(
+        await message.answer(
             f"❌ Ошибка при поиске: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # ПРОСМОТР ДЕТАЛЕЙ ПОЛЬЗОВАТЕЛЯ
 # ============================================================================
 
-async def view_user_details(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    user: User = None
-) -> int:
+async def view_user_details_from_message(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    user: User
+) -> None:
     """
-    Показывает детальную информацию о пользователе.
+    Показывает детальную информацию о пользователе (из message).
     """
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        message = query.message
-    else:
-        message = update.message
+    # Формирование карточки пользователя
+    status = "✅ Активен" if user.is_active else "🔒 Заблокирован"
+    role = "👑 Администратор" if user.is_admin else "👤 Пользователь"
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    # Права доступа
+    permissions_text = "<b>Права доступа:</b>\n"
+    permissions_text += f"  📥 Приемка сырья: {'✅' if user.can_receive_materials else '❌'}\n"
+    permissions_text += f"  🏭 Производство: {'✅' if user.can_produce else '❌'}\n"
+    permissions_text += f"  📦 Фасовка: {'✅' if user.can_pack else '❌'}\n"
+    permissions_text += f"  🚚 Отгрузка: {'✅' if user.can_ship else '❌'}\n"
+    permissions_text += f"  👑 Администратор: {'✅' if user.is_admin else '❌'}\n"
     
-    # Если пользователь не передан, загружаем из контекста
-    if not user:
-        user_id = context.user_data['admin_users'].get('selected_user_id')
-        if not user_id:
-            await message.reply_text("❌ Пользователь не выбран.")
-            return USERS_MENU
+    # Активность
+    activity_text = ""
+    if user.last_active:
+        last_active = user.last_active
+        time_diff = datetime.utcnow() - last_active
         
-        user = await session.get(User, user_id)
-        if not user:
-            await message.reply_text("❌ Пользователь не найден.")
-            return USERS_MENU
+        if time_diff < timedelta(minutes=5):
+            activity_str = "онлайн"
+        elif time_diff < timedelta(hours=1):
+            activity_str = f"{int(time_diff.total_seconds() / 60)} мин назад"
+        elif time_diff < timedelta(days=1):
+            activity_str = f"{int(time_diff.total_seconds() / 3600)} ч назад"
+        else:
+            activity_str = last_active.strftime('%d.%m.%Y %H:%M')
+        
+        activity_text = f"🕐 <b>Последняя активность:</b> {activity_str}\n"
+    
+    text = (
+        f"👤 <b>Информация о пользователе</b>\n\n"
+        f"🆔 <b>ID:</b> {user.id}\n"
+        f"📱 <b>Telegram ID:</b> {user.telegram_id}\n"
+        f"👤 <b>Username:</b> @{user.username or 'не указан'}\n"
+        f"📊 <b>Статус:</b> {status}\n"
+        f"🎭 <b>Роль:</b> {role}\n"
+        f"📅 <b>Регистрация:</b> {user.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        f"{activity_text}\n"
+        f"{permissions_text}"
+    )
+    
+    # Кнопки действий
+    keyboard_buttons = []
+    
+    # Управление правами
+    keyboard_buttons.append([
+        InlineKeyboardButton(text="🔧 Управление правами", callback_data=f'user_perms_{user.id}')
+    ])
+    
+    # Статистика
+    keyboard_buttons.append([
+        InlineKeyboardButton(text="📊 Статистика", callback_data=f'user_stats_{user.id}')
+    ])
+    
+    # Блокировка/разблокировка (но не самого себя)
+    data = await state.get_data()
+    current_admin_id = data.get('admin_id')
+    
+    if user.id != current_admin_id:
+        if user.is_active:
+            keyboard_buttons.append([
+                InlineKeyboardButton(text="🔒 Заблокировать", callback_data=f'user_block_{user.id}')
+            ])
+        else:
+            keyboard_buttons.append([
+                InlineKeyboardButton(text="✅ Разблокировать", callback_data=f'user_unblock_{user.id}')
+            ])
+    
+    keyboard_buttons.append([
+        InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')
+    ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    
+    await message.answer(text, reply_markup=keyboard, parse_mode='HTML')
+    await state.set_state(AdminUsersStates.view_user_details)
+
+
+@router.callback_query(AdminUsersStates.view_user_details, F.data.startswith('user_view_'))
+@router.callback_query(AdminUsersStates.toggle_permission, F.data.startswith('user_view_'))
+@router.callback_query(AdminUsersStates.view_user_statistics, F.data.startswith('user_view_'))
+async def view_user_details(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """
+    Показывает детальную информацию о пользователе (из callback).
+    """
+    await query.answer()
+    
+    # Извлечение ID пользователя
+    user_id = int(query.data.split('_')[-1])
+    await state.update_data(selected_user_id=user_id)
+    
+    user = await session.get(User, user_id)
+    if not user:
+        await query.message.edit_text("❌ Пользователь не найден.")
+        await state.set_state(AdminUsersStates.users_menu)
+        return
     
     # Формирование карточки пользователя
     status = "✅ Активен" if user.is_active else "🔒 Заблокирован"
@@ -372,63 +457,60 @@ async def view_user_details(
     
     # Управление правами
     keyboard_buttons.append([
-        InlineKeyboardButton("🔧 Управление правами", callback_data=f'user_perms_{user.id}')
+        InlineKeyboardButton(text="🔧 Управление правами", callback_data=f'user_perms_{user.id}')
     ])
     
     # Статистика
     keyboard_buttons.append([
-        InlineKeyboardButton("📊 Статистика", callback_data=f'user_stats_{user.id}')
+        InlineKeyboardButton(text="📊 Статистика", callback_data=f'user_stats_{user.id}')
     ])
     
     # Блокировка/разблокировка (но не самого себя)
-    current_admin_id = context.user_data['admin_users']['admin_id']
+    data = await state.get_data()
+    current_admin_id = data.get('admin_id')
+    
     if user.id != current_admin_id:
         if user.is_active:
             keyboard_buttons.append([
-                InlineKeyboardButton("🔒 Заблокировать", callback_data=f'user_block_{user.id}')
+                InlineKeyboardButton(text="🔒 Заблокировать", callback_data=f'user_block_{user.id}')
             ])
         else:
             keyboard_buttons.append([
-                InlineKeyboardButton("✅ Разблокировать", callback_data=f'user_unblock_{user.id}')
+                InlineKeyboardButton(text="✅ Разблокировать", callback_data=f'user_unblock_{user.id}')
             ])
     
     keyboard_buttons.append([
-        InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')
+        InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')
     ])
     
-    keyboard = InlineKeyboardMarkup(keyboard_buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
-    if update.callback_query:
-        await message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-    else:
-        await message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
-    
-    return VIEW_USER_DETAILS
+    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await state.set_state(AdminUsersStates.view_user_details)
 
 
 # ============================================================================
 # УПРАВЛЕНИЕ ПРАВАМИ
 # ============================================================================
 
-async def manage_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.view_user_details, F.data.startswith('user_perms_'))
+@router.callback_query(AdminUsersStates.toggle_permission, F.data.startswith('user_perms_'))
+async def manage_permissions(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает меню управления правами пользователя.
     """
-    query = update.callback_query
     await query.answer()
     
     # Извлечение ID пользователя
     user_id = int(query.data.split('_')[-1])
-    context.user_data['admin_users']['selected_user_id'] = user_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await state.update_data(selected_user_id=user_id)
     
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         # Формирование меню прав
         text = (
@@ -443,7 +525,7 @@ async def manage_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         receive_status = "✅ Включено" if user.can_receive_materials else "❌ Отключено"
         keyboard_buttons.append([
             InlineKeyboardButton(
-                f"📥 Приемка сырья: {receive_status}",
+                text=f"📥 Приемка сырья: {receive_status}",
                 callback_data=f'perm_receive_{user_id}'
             )
         ])
@@ -452,7 +534,7 @@ async def manage_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         produce_status = "✅ Включено" if user.can_produce else "❌ Отключено"
         keyboard_buttons.append([
             InlineKeyboardButton(
-                f"🏭 Производство: {produce_status}",
+                text=f"🏭 Производство: {produce_status}",
                 callback_data=f'perm_produce_{user_id}'
             )
         ])
@@ -461,7 +543,7 @@ async def manage_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pack_status = "✅ Включено" if user.can_pack else "❌ Отключено"
         keyboard_buttons.append([
             InlineKeyboardButton(
-                f"📦 Фасовка: {pack_status}",
+                text=f"📦 Фасовка: {pack_status}",
                 callback_data=f'perm_pack_{user_id}'
             )
         ])
@@ -470,48 +552,49 @@ async def manage_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ship_status = "✅ Включено" if user.can_ship else "❌ Отключено"
         keyboard_buttons.append([
             InlineKeyboardButton(
-                f"🚚 Отгрузка: {ship_status}",
+                text=f"🚚 Отгрузка: {ship_status}",
                 callback_data=f'perm_ship_{user_id}'
             )
         ])
         
         # Администратор (только если не последний админ)
-        current_admin_id = context.user_data['admin_users']['admin_id']
+        data = await state.get_data()
+        current_admin_id = data.get('admin_id')
+        
         if user.id != current_admin_id:  # Нельзя забрать права у самого себя
             admin_status = "✅ Включено" if user.is_admin else "❌ Отключено"
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    f"👑 Администратор: {admin_status}",
+                    text=f"👑 Администратор: {admin_status}",
                     callback_data=f'perm_admin_{user_id}'
                 )
             ])
         
         keyboard_buttons.append([
-            InlineKeyboardButton("🔙 К пользователю", callback_data=f'user_view_{user_id}'),
-            InlineKeyboardButton("🏠 К пользователям", callback_data='users_menu')
+            InlineKeyboardButton(text="🔙 К пользователю", callback_data=f'user_view_{user_id}'),
+            InlineKeyboardButton(text="🏠 К пользователям", callback_data='users_menu')
         ])
         
-        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return MANAGE_PERMISSIONS
+        await state.set_state(AdminUsersStates.manage_permissions)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
-async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.manage_permissions, F.data.startswith('perm_'))
+async def toggle_permission(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Переключает право пользователя.
     """
-    query = update.callback_query
     await query.answer()
     
     # Парсинг callback_data
@@ -519,14 +602,12 @@ async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     permission_type = parts[1]  # receive, produce, pack, ship, admin
     user_id = int(parts[-1])
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         # Определение изменяемого права
         permission_names = {
@@ -539,7 +620,8 @@ async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         if permission_type not in permission_names:
             await query.message.edit_text("❌ Неизвестное право.")
-            return MANAGE_PERMISSIONS
+            await state.set_state(AdminUsersStates.manage_permissions)
+            return
         
         field_name, display_name, emoji = permission_names[permission_type]
         current_value = getattr(user, field_name)
@@ -554,7 +636,7 @@ async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             
             if admin_count <= 1:
                 await query.answer("❌ Нельзя забрать права у последнего администратора!", show_alert=True)
-                return MANAGE_PERMISSIONS
+                return
         
         # Сохранение изменений
         setattr(user, field_name, new_value)
@@ -564,7 +646,6 @@ async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await session.refresh(user)
         
         # Уведомление
-        action = "включено" if new_value else "отключено"
         text = (
             f"✅ <b>Право изменено!</b>\n\n"
             f"👤 <b>Пользователь:</b> @{user.username or f'ID:{user.telegram_id}'}\n"
@@ -572,48 +653,45 @@ async def toggle_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"📊 <b>Статус:</b> {'✅ Включено' if new_value else '❌ Отключено'}"
         )
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔧 Продолжить управление", callback_data=f'user_perms_{user_id}')],
-            [InlineKeyboardButton("🔙 К пользователю", callback_data=f'user_view_{user_id}')],
-            [InlineKeyboardButton("🏠 К пользователям", callback_data='users_menu')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔧 Продолжить управление", callback_data=f'user_perms_{user_id}')],
+            [InlineKeyboardButton(text="🔙 К пользователю", callback_data=f'user_view_{user_id}')],
+            [InlineKeyboardButton(text="🏠 К пользователям", callback_data='users_menu')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return TOGGLE_PERMISSION
+        await state.set_state(AdminUsersStates.toggle_permission)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка при изменении права: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # СТАТИСТИКА ПОЛЬЗОВАТЕЛЯ
 # ============================================================================
 
-async def view_user_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.view_user_details, F.data.startswith('user_stats_'))
+async def view_user_statistics(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Показывает статистику операций пользователя.
     """
-    query = update.callback_query
     await query.answer("⏳ Подготовка статистики...")
     
     # Извлечение ID пользователя
     user_id = int(query.data.split('_')[-1])
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         # Подсчет операций
         # Движения
@@ -649,48 +727,45 @@ async def view_user_statistics(update: Update, context: ContextTypes.DEFAULT_TYP
             f"<b>Всего операций:</b> {movements_count + production_count + shipments_count}"
         )
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 К пользователю", callback_data=f'user_view_{user_id}')],
-            [InlineKeyboardButton("🏠 К пользователям", callback_data='users_menu')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 К пользователю", callback_data=f'user_view_{user_id}')],
+            [InlineKeyboardButton(text="🏠 К пользователям", callback_data='users_menu')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return VIEW_USER_STATISTICS
+        await state.set_state(AdminUsersStates.view_user_statistics)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка при подготовке статистики: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # БЛОКИРОВКА ПОЛЬЗОВАТЕЛЯ
 # ============================================================================
 
-async def block_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.view_user_details, F.data.startswith('user_block_'))
+async def block_user_start(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Запрашивает причину блокировки.
     """
-    query = update.callback_query
     await query.answer()
     
     # Извлечение ID пользователя
     user_id = int(query.data.split('_')[-1])
-    context.user_data['admin_users']['block_user_id'] = user_id
-    
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
+    await state.update_data(block_user_id=user_id)
     
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         text = (
             f"🔒 <b>Блокировка пользователя</b>\n\n"
@@ -705,43 +780,41 @@ async def block_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             parse_mode='HTML'
         )
         
-        return BLOCK_USER_REASON
+        await state.set_state(AdminUsersStates.block_user_reason)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
-async def block_user_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.message(AdminUsersStates.block_user_reason, F.text)
+async def block_user_reason(message: Message, state: FSMContext, session: AsyncSession) -> None:
     """
     Обрабатывает ввод причины блокировки.
     """
-    message = update.message
     user_input = message.text.strip()
     
     # Валидация
     validation = validate_text_length(user_input, min_length=3, max_length=500)
     
     if not validation['valid']:
-        await message.reply_text(
+        await message.answer(
             f"❌ {validation['error']}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
-        return BLOCK_USER_REASON
+        return
     
     # Сохранение причины
-    context.user_data['admin_users']['block_reason'] = user_input
+    await state.update_data(block_reason=user_input)
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    user_id = context.user_data['admin_users']['block_user_id']
+    data = await state.get_data()
+    user_id = data.get('block_user_id')
     user = await session.get(User, user_id)
     
     text = (
@@ -752,7 +825,7 @@ async def block_user_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "❓ Подтвердить блокировку?"
     )
     
-    await message.reply_text(
+    await message.answer(
         text,
         reply_markup=get_confirmation_keyboard(
             confirm_callback='user_confirm_block',
@@ -761,27 +834,26 @@ async def block_user_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode='HTML'
     )
     
-    return CONFIRM_BLOCK_USER
+    await state.set_state(AdminUsersStates.confirm_block_user)
 
 
-async def confirm_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.confirm_block_user, F.data == 'user_confirm_block')
+async def confirm_block_user(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Выполняет блокировку пользователя.
     """
-    query = update.callback_query
     await query.answer("⏳ Блокировка пользователя...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    user_id = context.user_data['admin_users']['block_user_id']
-    reason = context.user_data['admin_users']['block_reason']
+    data = await state.get_data()
+    user_id = data.get('block_user_id')
+    reason = data.get('block_reason')
     
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         # Блокировка
         user.is_active = False
@@ -801,50 +873,46 @@ async def confirm_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         
         # Очистка данных
-        context.user_data['admin_users'].pop('block_user_id', None)
-        context.user_data['admin_users'].pop('block_reason', None)
+        await state.update_data(block_user_id=None, block_reason=None)
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 К пользователю", callback_data=f'user_view_{user_id}')],
-            [InlineKeyboardButton("🏠 К пользователям", callback_data='users_menu')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 К пользователю", callback_data=f'user_view_{user_id}')],
+            [InlineKeyboardButton(text="🏠 К пользователям", callback_data='users_menu')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка при блокировке: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
 # РАЗБЛОКИРОВКА ПОЛЬЗОВАТЕЛЯ
 # ============================================================================
 
-async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.view_user_details, F.data.startswith('user_unblock_'))
+async def unblock_user(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
-    Разблокирует пользователя.
+    Разблокирует пользователя с подтверждением.
     """
-    query = update.callback_query
     await query.answer()
     
     # Извлечение ID пользователя
     user_id = int(query.data.split('_')[-1])
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         text = (
             f"✅ <b>Разблокировка пользователя</b>\n\n"
@@ -853,7 +921,7 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "❓ Подтвердить разблокировку?"
         )
         
-        context.user_data['admin_users']['unblock_user_id'] = user_id
+        await state.update_data(unblock_user_id=user_id)
         
         await query.message.edit_text(
             text,
@@ -864,35 +932,34 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             parse_mode='HTML'
         )
         
-        return CONFIRM_UNBLOCK_USER
+        await state.set_state(AdminUsersStates.confirm_unblock_user)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
-async def confirm_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(AdminUsersStates.confirm_unblock_user, F.data == 'user_confirm_unblock')
+async def confirm_unblock_user(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """
     Выполняет разблокировку пользователя.
     """
-    query = update.callback_query
     await query.answer("⏳ Разблокировка...")
     
-    # Получение сессии БД
-    session: AsyncSession = context.bot_data['db_session']
-    
-    user_id = context.user_data['admin_users']['unblock_user_id']
+    data = await state.get_data()
+    user_id = data.get('unblock_user_id')
     
     try:
         user = await session.get(User, user_id)
         if not user:
             await query.message.edit_text("❌ Пользователь не найден.")
-            return USERS_MENU
+            await state.set_state(AdminUsersStates.users_menu)
+            return
         
         # Разблокировка
         user.is_active = True
@@ -908,139 +975,54 @@ async def confirm_unblock_user(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         
         # Очистка данных
-        context.user_data['admin_users'].pop('unblock_user_id', None)
+        await state.update_data(unblock_user_id=None)
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 К пользователю", callback_data=f'user_view_{user_id}')],
-            [InlineKeyboardButton("🏠 К пользователям", callback_data='users_menu')]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 К пользователю", callback_data=f'user_view_{user_id}')],
+            [InlineKeyboardButton(text="🏠 К пользователям", callback_data='users_menu')]
         ])
         
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
-        
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
         
     except Exception as e:
         await query.message.edit_text(
             f"❌ Ошибка при разблокировке: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 К пользователям", callback_data='users_menu')]
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К пользователям", callback_data='users_menu')]
             ])
         )
-        return USERS_MENU
+        await state.set_state(AdminUsersStates.users_menu)
 
 
 # ============================================================================
-# ВОЗВРАТ К ПОЛЬЗОВАТЕЛЮ
+# НАВИГАЦИЯ И ОТМЕНА
 # ============================================================================
 
-async def back_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Возвращает к карточке пользователя.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = int(query.data.split('_')[-1])
-    context.user_data['admin_users']['selected_user_id'] = user_id
-    
-    return await view_user_details(update, context)
+@router.callback_query(StateFilter(AdminUsersStates), F.data == 'users_menu')
+async def back_to_users_menu(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возврат в главное меню управления пользователями."""
+    await users_menu(query, state, session)
 
 
-# ============================================================================
-# ОТМЕНА И ВЫХОД
-# ============================================================================
-
-async def cancel_users_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+@router.callback_query(F.data == 'users_exit')
+@router.message(Command('cancel'), StateFilter(AdminUsersStates))
+async def cancel_users_admin(event: Union[Message, CallbackQuery], state: FSMContext) -> None:
     """
     Выходит из управления пользователями.
     """
-    query = update.callback_query if update.callback_query else None
-    
-    if query:
-        await query.answer()
-        message = query.message
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        message = event.message
     else:
-        message = update.message
+        message = event
     
     # Очистка данных
-    context.user_data.pop('admin_users', None)
+    await state.clear()
     
-    await message.reply_text(
-        "✅ Управление пользователями завершено.",
-        reply_markup=get_main_menu_keyboard()
-    )
+    text = "✅ Управление пользователями завершено."
     
-    return ConversationHandler.END
-
-
-# ============================================================================
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
-# ============================================================================
-
-def get_admin_users_handler() -> ConversationHandler:
-    """
-    Создает и возвращает ConversationHandler для управления пользователями.
-    
-    Returns:
-        ConversationHandler: Настроенный обработчик диалога
-    """
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler('users_admin', users_menu),
-            CallbackQueryHandler(users_menu, pattern='^admin_users$')
-        ],
-        states={
-            USERS_MENU: [
-                CallbackQueryHandler(list_users, pattern='^users_list$'),
-                CallbackQueryHandler(search_user_start, pattern='^users_search$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$'),
-                CallbackQueryHandler(cancel_users_admin, pattern='^users_exit$')
-            ],
-            LIST_USERS: [
-                CallbackQueryHandler(search_user_start, pattern='^users_search$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            SEARCH_USER_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, search_user_input)
-            ],
-            VIEW_USER_DETAILS: [
-                CallbackQueryHandler(manage_permissions, pattern='^user_perms_\\d+$'),
-                CallbackQueryHandler(view_user_statistics, pattern='^user_stats_\\d+$'),
-                CallbackQueryHandler(block_user_start, pattern='^user_block_\\d+$'),
-                CallbackQueryHandler(unblock_user, pattern='^user_unblock_\\d+$'),
-                CallbackQueryHandler(back_to_user, pattern='^user_view_\\d+$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            MANAGE_PERMISSIONS: [
-                CallbackQueryHandler(toggle_permission, pattern='^perm_'),
-                CallbackQueryHandler(back_to_user, pattern='^user_view_\\d+$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            TOGGLE_PERMISSION: [
-                CallbackQueryHandler(manage_permissions, pattern='^user_perms_\\d+$'),
-                CallbackQueryHandler(back_to_user, pattern='^user_view_\\d+$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            VIEW_USER_STATISTICS: [
-                CallbackQueryHandler(back_to_user, pattern='^user_view_\\d+$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            BLOCK_USER_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, block_user_reason)
-            ],
-            CONFIRM_BLOCK_USER: [
-                CallbackQueryHandler(confirm_block_user, pattern='^user_confirm_block$'),
-                CallbackQueryHandler(users_menu, pattern='^users_menu$')
-            ],
-            CONFIRM_UNBLOCK_USER: [
-                CallbackQueryHandler(confirm_unblock_user, pattern='^user_confirm_unblock$'),
-                CallbackQueryHandler(back_to_user, pattern='^user_view_\\d+$')
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel_users_admin),
-            CallbackQueryHandler(cancel_users_admin, pattern='^cancel$')
-        ],
-        name='admin_users_conversation',
-        persistent=False
-    )
+    if isinstance(event, CallbackQuery):
+        await message.edit_text(text, parse_mode='HTML')
+    else:
+        await message.answer(text, reply_markup=get_main_menu_keyboard(), parse_mode='HTML')
