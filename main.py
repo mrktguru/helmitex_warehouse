@@ -179,6 +179,14 @@ async def main():
             bot = await create_bot()
             dp = create_dispatcher()
             
+            # Настраиваем команды бота (ДО запуска polling!)
+            logger.info("⚙️ Настройка команд бота...")
+            try:
+                await setup_bot_commands(bot)
+                logger.info("✅ Команды бота настроены")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка настройки команд: {e}")
+            
             # Удаляем webhook (если был установлен ранее)
             await bot.delete_webhook(drop_pending_updates=settings.DROP_PENDING_UPDATES)
             logger.info("✅ Webhook удален (если был установлен)")
@@ -216,14 +224,6 @@ async def main():
                 await polling_task
             except asyncio.CancelledError:
                 logger.info("✅ Polling остановлен")
-
-            # Настраиваем команды бота
-            logger.info("⚙️ Настройка команд бота...")
-            try:
-                await setup_bot_commands(bot)
-                logger.info("✅ Команды бота настроены")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка настройки команд: {e}")
 
             # Закрываем сессию бота
             await bot.session.close()
