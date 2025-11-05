@@ -28,8 +28,7 @@ from app.config import settings
 from app.database.connection import init_db, close_db, create_tables
 from app.middleware.database import setup_middleware
 from app.utils.logger import setup_logging, get_logger
-from app.bot import register_handlers
-
+from app.bot import register_handlers, setup_bot_commands
 
 # Флаг для graceful shutdown
 shutdown_event = asyncio.Event()
@@ -217,7 +216,15 @@ async def main():
                 await polling_task
             except asyncio.CancelledError:
                 logger.info("✅ Polling остановлен")
-            
+
+            # Настраиваем команды бота
+            logger.info("⚙️ Настройка команд бота...")
+            try:
+                await setup_bot_commands(bot)
+                logger.info("✅ Команды бота настроены")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка настройки команд: {e}")
+
             # Закрываем сессию бота
             await bot.session.close()
             logger.info("✅ Сессия бота закрыта")
