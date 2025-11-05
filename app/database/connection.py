@@ -11,6 +11,7 @@
 Использует настройки из app.config.py для конфигурации подключения.
 """
 
+import logging
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -103,8 +104,6 @@ async def init_db() -> None:
     SessionLocal = create_session_factory(engine)
     
     # Логируем успешное подключение
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info("✅ База данных инициализирована")
 
 
@@ -119,9 +118,6 @@ async def close_db() -> None:
     
     if engine:
         await engine.dispose()
-        
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info("✅ Подключение к базе данных закрыто")
 
 
@@ -184,9 +180,7 @@ async def create_tables() -> None:
     async with engine.begin() as conn:
         # Создаем все таблицы из Base.metadata
         await conn.run_sync(Base.metadata.create_all)
-        
-    import logging
-    logger = logging.getLogger(__name__)
+    
     logger.info("✅ Таблицы базы данных созданы")
 
 
@@ -217,7 +211,5 @@ async def drop_tables() -> None:
     async with engine.begin() as conn:
         # Удаляем все таблицы из Base.metadata
         await conn.run_sync(Base.metadata.drop_all)
-        
-    import logging
-    logger = logging.getLogger(__name__)
+    
     logger.warning("⚠️ Все таблицы базы данных удалены")
