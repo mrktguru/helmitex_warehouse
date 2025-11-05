@@ -8,7 +8,7 @@
 - Активация/архивация рецептов
 - Валидация рецептов
 """
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, and_
 
