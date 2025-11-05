@@ -2054,3 +2054,7 @@ async def cancel_from_any_state(query: CallbackQuery, state: FSMContext) -> None
         # По умолчанию - главное меню
         session = None  # Нужно получить session через middleware
         await start_admin(query, state, session)
+
+
+
+__all__ = ['router']
