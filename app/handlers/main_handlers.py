@@ -179,4 +179,4 @@ async def history_menu_callback(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
     )
     
-__all__ = ['router']
+__all__ = ['main_handlers_router']
