@@ -790,3 +790,8 @@ async def cancel_production(update: Message | CallbackQuery, state: FSMContext) 
         "❌ Производство отменено.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+
+__all__ = ['production_router']
+
