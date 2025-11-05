@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import settings
 from app.database.models import Base
@@ -49,10 +48,8 @@ def create_engine() -> AsyncEngine:
     # Получаем конфигурацию SQLAlchemy из settings
     sqlalchemy_config = settings.get_sqlalchemy_config()
     
-    # Определяем класс пула в зависимости от окружения
-    # В debug режиме используем NullPool (без пула) для тестирования
-    pool_class = NullPool if settings.DEBUG else QueuePool
-    
+    # Для async engine НЕ указываем poolclass явно
+    # SQLAlchemy автоматически использует AsyncAdaptedQueuePool для asyncpg
     return create_async_engine(
         settings.DATABASE_URL,
         echo=sqlalchemy_config["echo"],  # Логирование SQL в dev режиме
@@ -61,8 +58,6 @@ def create_engine() -> AsyncEngine:
         pool_pre_ping=sqlalchemy_config["pool_pre_ping"],  # Проверка соединения перед использованием
         pool_timeout=sqlalchemy_config["pool_timeout"],  # Таймаут ожидания соединения
         pool_recycle=sqlalchemy_config["pool_recycle"],  # Переиспользование соединений
-        poolclass=pool_class,  # Класс пула соединений
-        future=True,  # Использование SQLAlchemy 2.0 style API
     )
 
 
