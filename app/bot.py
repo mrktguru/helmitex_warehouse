@@ -11,15 +11,14 @@
 import logging
 from datetime import datetime
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.config import settings
-from app.database import User
+from app.database.models import User
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -63,12 +62,12 @@ def get_main_menu_keyboard(user: User | None = None) -> InlineKeyboardMarkup:
             buttons.append([InlineKeyboardButton(text="🚚 Отгрузка", callback_data='shipment_start')])
         
         # Информационные кнопки (доступны всем)
-        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_view_start')])
+        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_start')])
         buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
         
         # Административная кнопка
         if user.is_admin:
-            buttons.append([InlineKeyboardButton(text="👨‍💼 Администрирование", callback_data='admin_panel_start')])
+            buttons.append([InlineKeyboardButton(text="👨‍💼 Администрирование", callback_data='admin_start')])
         
         # Справка
         buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
@@ -129,7 +128,7 @@ async def start_command(message: Message, session: AsyncSession) -> None:
                 "✅ Вы успешно зарегистрированы.\n\n"
                 "⚠️ <b>Права доступа не назначены.</b>\n"
                 "Обратитесь к администратору для получения прав.\n\n"
-                "После назначения прав вам будут доступны операции:"
+                "После назначения прав вам будут доступны операции."
             )
             keyboard = get_main_menu_keyboard(new_user)
         
@@ -315,7 +314,6 @@ async def help_callback(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     
     # Создаём фейковое сообщение для переиспользования логики help_command
-    # Альтернатива: вынести логику в отдельную функцию
     await help_command(callback.message, session)
 
 
@@ -366,10 +364,6 @@ async def setup_bot_commands(bot: Bot) -> None:
 # ФУНКЦИЯ РЕГИСТРАЦИИ HANDLERS (для main.py)
 # ============================================================================
 
-# ============================================================================
-# ФУНКЦИЯ РЕГИСТРАЦИИ HANDLERS (для main.py)
-# ============================================================================
-
 def register_handlers(dp) -> None:
     """
     Регистрирует все handlers в dispatcher.
@@ -379,80 +373,81 @@ def register_handlers(dp) -> None:
     Args:
         dp: Dispatcher из aiogram
     """
-    # Регистрируем главный роутер
+    logger.info("=" * 60)
+    logger.info("🔧 РЕГИСТРАЦИЯ HANDLERS")
+    logger.info("=" * 60)
+    
+    # 1. Главный роутер (команды /start, /help)
     dp.include_router(main_router)
+    logger.info("✅ Main router registered")
     
-    # Импортируем и регистрируем все остальные роутеры
+    # 2. Административные панели (проверяют права)
     try:
-        from app.handlers.arrival import arrival_router
-        dp.include_router(arrival_router)
-        logger.info("✅ Arrival router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import arrival_router: {e}")
-    
-    try:
-        from app.handlers.production import production_router
-        dp.include_router(production_router)
-        logger.info("✅ Production router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import production_router: {e}")
-    
-    try:
-        from app.handlers.packing import packing_router
-        dp.include_router(packing_router)
-        logger.info("✅ Packing router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import packing_router: {e}")
-    
-    try:
-        from app.handlers.shipment import shipment_router
-        dp.include_router(shipment_router)
-        logger.info("✅ Shipment router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import shipment_router: {e}")
-    
-    try:
-        from app.handlers.stock import stock_router
-        dp.include_router(stock_router)
-        logger.info("✅ Stock router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import stock_router: {e}")
-    
-    try:
-        from app.handlers.history import history_router
-        dp.include_router(history_router)
-        logger.info("✅ History router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import history_router: {e}")
-    
-    try:
-        from app.handlers.admin_warehouse import admin_warehouse_router
-        dp.include_router(admin_warehouse_router)
-        logger.info("✅ Admin warehouse router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import admin_warehouse_router: {e}")
-    
-    try:
-        from app.handlers.admin_users import admin_users_router
+        from app.handlers.admin_users import router as admin_users_router
         dp.include_router(admin_users_router)
         logger.info("✅ Admin users router registered")
     except ImportError as e:
-        logger.warning(f"⚠️ Could not import admin_users_router: {e}")
+        logger.warning(f"⚠️ Could not import admin_users router: {e}")
     
     try:
-        from app.handlers.main_handlers import main_handlers_router
+        from app.handlers.admin_warehouse import router as admin_warehouse_router
+        dp.include_router(admin_warehouse_router)
+        logger.info("✅ Admin warehouse router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import admin_warehouse router: {e}")
+    
+    # 3. Основные бизнес-процессы
+    try:
+        from app.handlers.arrival import router as arrival_router
+        dp.include_router(arrival_router)
+        logger.info("✅ Arrival router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import arrival router: {e}")
+    
+    try:
+        from app.handlers.production import router as production_router
+        dp.include_router(production_router)
+        logger.info("✅ Production router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import production router: {e}")
+    
+    try:
+        from app.handlers.packing import router as packing_router
+        dp.include_router(packing_router)
+        logger.info("✅ Packing router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import packing router: {e}")
+    
+    try:
+        from app.handlers.shipment import router as shipment_router
+        dp.include_router(shipment_router)
+        logger.info("✅ Shipment router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import shipment router: {e}")
+    
+    # 4. Просмотр данных
+    try:
+        from app.handlers.stock import router as stock_router
+        dp.include_router(stock_router)
+        logger.info("✅ Stock router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import stock router: {e}")
+    
+    try:
+        from app.handlers.history import router as history_router
+        dp.include_router(history_router)
+        logger.info("✅ History router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import history router: {e}")
+    
+    # 5. Дополнительные handlers (если есть)
+    try:
+        from app.handlers.main_handlers import router as main_handlers_router
         dp.include_router(main_handlers_router)
         logger.info("✅ Main handlers router registered")
     except ImportError as e:
-        logger.warning(f"⚠️ Could not import main_handlers_router: {e}")
-    
-    try:
-        from app.handlers.start_handler import start_handlers_router
-        dp.include_router(start_handlers_router)
-        logger.info("✅ Start handler router registered")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import start_handlers_router: {e}")
+        logger.debug(f"ℹ️ Main handlers router not found: {e}")
     
     logger.info("=" * 60)
-    logger.info("✅ Handler registration completed")
+    logger.info("✅ HANDLER REGISTRATION COMPLETED")
     logger.info("=" * 60)
