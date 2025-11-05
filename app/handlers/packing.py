@@ -793,3 +793,7 @@ async def cancel_packing(update: Message | CallbackQuery, state: FSMContext) -> 
         "❌ Фасовка отменена.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+
+__all__ = ['packing_router']
