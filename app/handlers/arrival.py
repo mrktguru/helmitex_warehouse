@@ -635,3 +635,8 @@ async def cancel_arrival(
         "❌ Приемка отменена.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+
+__all__ = ['arrival_router']
+
