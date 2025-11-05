@@ -1026,3 +1026,7 @@ async def cancel_shipment(update: Message | CallbackQuery, state: FSMContext) ->
         "❌ Отгрузка отменена.",
         reply_markup=get_main_menu_keyboard()
     )
+
+
+
+__all__ = ['shipment_router']
