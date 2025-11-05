@@ -8,13 +8,11 @@
 - Просмотра истории отгрузок
 - Просмотра истории отходов
 - Фильтрации по датам и типам операций
-
-Конвертировано на aiogram 3.x с использованием FSM (StatesGroup).
 """
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
@@ -32,31 +30,27 @@ from app.services import (
     packing_service,
     shipment_service
 )
-from app.utils.keyboards import (
-    get_warehouses_keyboard,
-    get_main_menu_keyboard
-)
-from app.validators.input_validators import parse_date_input
+from app.utils.keyboards import get_main_menu_keyboard
 
 
 # ============================================================================
-# FSM STATES
+# FSM СОСТОЯНИЯ
 # ============================================================================
 
 class HistoryStates(StatesGroup):
     """Состояния FSM для просмотра истории операций."""
-    select_action = State()       # Выбор типа операции (движения, производство, фасовка, отгрузки, отходы)
-    select_period = State()       # Выбор периода (сегодня, вчера, неделя, месяц, всё)
-    select_warehouse = State()    # Выбор склада (все склады или конкретный)
-    view_movements = State()      # Просмотр движений товаров
-    view_production = State()     # Просмотр истории производства
-    view_packing = State()        # Просмотр истории фасовки
-    view_shipments = State()      # Просмотр истории отгрузок
-    view_waste = State()          # Просмотр истории отходов
+    select_action = State()      # Выбор типа истории
+    select_period = State()       # Выбор периода
+    select_warehouse = State()    # Выбор склада
+    view_movements = State()      # Просмотр движений
+    view_production = State()     # Просмотр производства
+    view_packing = State()        # Просмотр фасовки
+    view_shipments = State()      # Просмотр отгрузок
+    view_waste = State()          # Просмотр отходов
 
 
 # ============================================================================
-# ROUTER
+# РОУТЕР
 # ============================================================================
 
 router = Router(name='history')
@@ -68,7 +62,11 @@ router = Router(name='history')
 
 @router.message(Command('history'))
 @router.callback_query(F.data == 'history_start')
-async def start_history(event: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession) -> None:
+async def start_history(
+    event: Union[Message, CallbackQuery],
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Начинает процесс просмотра истории операций.
     
@@ -90,13 +88,14 @@ async def start_history(event: Union[Message, CallbackQuery], state: FSMContext,
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
+        await state.clear()
         return
     
     # Инициализация данных диалога
     await state.update_data(
         user_id=user_id,
         started_at=datetime.utcnow().isoformat(),
-        period='today'  # По умолчанию сегодня
+        period='today'
     )
     
     # Меню выбора типа истории
@@ -126,17 +125,15 @@ async def start_history(event: Union[Message, CallbackQuery], state: FSMContext,
 # ВЫБОР ПЕРИОДА
 # ============================================================================
 
-@router.callback_query(HistoryStates.select_action, F.data.in_([
-    'hist_movements', 'hist_production', 'hist_packing', 'hist_shipments', 'hist_waste'
-]))
-async def select_period_menu(callback: CallbackQuery, state: FSMContext) -> None:
+async def select_period_menu(
+    query: CallbackQuery,
+    state: FSMContext,
+    operation_type: str
+) -> None:
     """
     Показывает меню выбора периода для просмотра истории.
     """
-    await callback.answer()
-    
-    # Определение типа операции
-    operation_type = callback.data.replace('hist_', '')
+    await query.answer()
     
     # Сохранение типа операции
     await state.update_data(operation_type=operation_type)
@@ -168,8 +165,38 @@ async def select_period_menu(callback: CallbackQuery, state: FSMContext) -> None
         "Выберите период:"
     )
     
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
     await state.set_state(HistoryStates.select_period)
+
+
+@router.callback_query(HistoryStates.select_action, F.data == 'hist_movements')
+async def select_movements_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Переход к выбору периода для движений."""
+    await select_period_menu(query, state, 'movements')
+
+
+@router.callback_query(HistoryStates.select_action, F.data == 'hist_production')
+async def select_production_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Переход к выбору периода для производства."""
+    await select_period_menu(query, state, 'production')
+
+
+@router.callback_query(HistoryStates.select_action, F.data == 'hist_packing')
+async def select_packing_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Переход к выбору периода для фасовки."""
+    await select_period_menu(query, state, 'packing')
+
+
+@router.callback_query(HistoryStates.select_action, F.data == 'hist_shipments')
+async def select_shipments_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Переход к выбору периода для отгрузок."""
+    await select_period_menu(query, state, 'shipments')
+
+
+@router.callback_query(HistoryStates.select_action, F.data == 'hist_waste')
+async def select_waste_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Переход к выбору периода для отходов."""
+    await select_period_menu(query, state, 'waste')
 
 
 # ============================================================================
@@ -177,28 +204,33 @@ async def select_period_menu(callback: CallbackQuery, state: FSMContext) -> None
 # ============================================================================
 
 @router.callback_query(HistoryStates.select_period, F.data.startswith('hist_period_'))
-async def select_period(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def select_period(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор периода и переходит к выбору склада.
     """
-    await callback.answer()
+    await query.answer()
     
     # Определение периода
+    callback_data = query.data
     today = date.today()
     
-    if callback.data == 'hist_period_today':
+    if callback_data == 'hist_period_today':
         start_date = today
         end_date = today
         period_name = "Сегодня"
-    elif callback.data == 'hist_period_yesterday':
+    elif callback_data == 'hist_period_yesterday':
         start_date = today - timedelta(days=1)
         end_date = today - timedelta(days=1)
         period_name = "Вчера"
-    elif callback.data == 'hist_period_week':
+    elif callback_data == 'hist_period_week':
         start_date = today - timedelta(days=7)
         end_date = today
         period_name = "Последние 7 дней"
-    elif callback.data == 'hist_period_month':
+    elif callback_data == 'hist_period_month':
         start_date = today - timedelta(days=30)
         end_date = today
         period_name = "Последние 30 дней"
@@ -207,7 +239,7 @@ async def select_period(callback: CallbackQuery, state: FSMContext, session: Asy
         end_date = None
         period_name = "Весь период"
     
-    # Сохранение периода (конвертация date в ISO строку для FSM)
+    # Сохранение периода
     await state.update_data(
         start_date=start_date.isoformat() if start_date else None,
         end_date=end_date.isoformat() if end_date else None,
@@ -219,7 +251,7 @@ async def select_period(callback: CallbackQuery, state: FSMContext, session: Asy
         warehouses = await warehouse_service.get_warehouses(session, active_only=True)
         
         if not warehouses:
-            await callback.message.edit_text(
+            await query.message.edit_text(
                 "❌ Нет доступных складов.",
                 reply_markup=get_main_menu_keyboard()
             )
@@ -241,7 +273,6 @@ async def select_period(callback: CallbackQuery, state: FSMContext, session: Asy
                 )
             ])
         
-        # Получаем operation_type из state для кнопки "Назад"
         data = await state.get_data()
         operation_type = data.get('operation_type', 'movements')
         
@@ -257,11 +288,11 @@ async def select_period(callback: CallbackQuery, state: FSMContext, session: Asy
             "Выберите склад:"
         )
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.select_warehouse)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -273,18 +304,24 @@ async def select_period(callback: CallbackQuery, state: FSMContext, session: Asy
 # ============================================================================
 
 @router.callback_query(HistoryStates.select_warehouse, F.data.startswith('hist_wh_'))
-async def select_warehouse_and_view(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def select_warehouse_and_view(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Обрабатывает выбор склада и показывает данные.
     """
-    await callback.answer("⏳ Загрузка данных...")
+    await query.answer("⏳ Загрузка данных...")
     
     # Извлечение ID склада
-    if callback.data == 'hist_wh_all':
+    callback_data = query.data
+    
+    if callback_data == 'hist_wh_all':
         warehouse_id = None
         warehouse_name = "Все склады"
     else:
-        warehouse_id = int(callback.data.split('_')[-1])
+        warehouse_id = int(callback_data.split('_')[-1])
         
         # Получение названия склада
         warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
@@ -296,23 +333,22 @@ async def select_warehouse_and_view(callback: CallbackQuery, state: FSMContext, 
         warehouse_name=warehouse_name
     )
     
-    # Получение operation_type из state
+    # Перенаправление на нужный обработчик
     data = await state.get_data()
     operation_type = data.get('operation_type')
     
-    # Перенаправление на нужный обработчик
     if operation_type == 'movements':
-        await view_movements(callback, state, session)
+        await view_movements(query, state, session)
     elif operation_type == 'production':
-        await view_production(callback, state, session)
+        await view_production(query, state, session)
     elif operation_type == 'packing':
-        await view_packing(callback, state, session)
+        await view_packing(query, state, session)
     elif operation_type == 'shipments':
-        await view_shipments(callback, state, session)
+        await view_shipments(query, state, session)
     elif operation_type == 'waste':
-        await view_waste(callback, state, session)
+        await view_waste(query, state, session)
     else:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             "❌ Неизвестный тип операции.",
             reply_markup=get_main_menu_keyboard()
         )
@@ -323,7 +359,11 @@ async def select_warehouse_and_view(callback: CallbackQuery, state: FSMContext, 
 # ПРОСМОТР ДВИЖЕНИЙ
 # ============================================================================
 
-async def view_movements(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def view_movements(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает историю движений товаров.
     """
@@ -346,14 +386,13 @@ async def view_movements(callback: CallbackQuery, state: FSMContext, session: As
         if data.get('warehouse_id'):
             filters.append(Movement.warehouse_id == data['warehouse_id'])
         
-        # Конвертация ISO строк обратно в date
         if data.get('start_date'):
-            start_date = date.fromisoformat(data['start_date'])
-            filters.append(Movement.created_at >= datetime.combine(start_date, datetime.min.time()))
+            start_dt = datetime.fromisoformat(data['start_date'])
+            filters.append(Movement.created_at >= datetime.combine(start_dt.date(), datetime.min.time()))
         
         if data.get('end_date'):
-            end_date = date.fromisoformat(data['end_date'])
-            filters.append(Movement.created_at <= datetime.combine(end_date, datetime.max.time()))
+            end_dt = datetime.fromisoformat(data['end_date'])
+            filters.append(Movement.created_at <= datetime.combine(end_dt.date(), datetime.max.time()))
         
         if filters:
             stmt = stmt.where(and_(*filters))
@@ -436,11 +475,11 @@ async def view_movements(callback: CallbackQuery, state: FSMContext, session: As
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.view_movements)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка при загрузке движений: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -451,14 +490,18 @@ async def view_movements(callback: CallbackQuery, state: FSMContext, session: As
 # ПРОСМОТР ИСТОРИИ ПРОИЗВОДСТВА
 # ============================================================================
 
-async def view_production(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def view_production(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает историю производственных партий.
     """
     data = await state.get_data()
     
     try:
-        # Конвертация ISO строк обратно в date (если есть)
+        # Преобразование дат
         start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
         end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
         
@@ -541,11 +584,11 @@ async def view_production(callback: CallbackQuery, state: FSMContext, session: A
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.view_production)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка при загрузке истории производства: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -556,14 +599,18 @@ async def view_production(callback: CallbackQuery, state: FSMContext, session: A
 # ПРОСМОТР ИСТОРИИ ФАСОВКИ
 # ============================================================================
 
-async def view_packing(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def view_packing(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает историю операций фасовки.
     """
     data = await state.get_data()
     
     try:
-        # Конвертация ISO строк обратно в date (если есть)
+        # Преобразование дат
         start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
         end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
         
@@ -634,11 +681,11 @@ async def view_packing(callback: CallbackQuery, state: FSMContext, session: Asyn
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.view_packing)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка при загрузке истории фасовки: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -649,14 +696,18 @@ async def view_packing(callback: CallbackQuery, state: FSMContext, session: Asyn
 # ПРОСМОТР ИСТОРИИ ОТГРУЗОК
 # ============================================================================
 
-async def view_shipments(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def view_shipments(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает историю отгрузок.
     """
     data = await state.get_data()
     
     try:
-        # Конвертация ISO строк обратно в date (если есть)
+        # Преобразование дат
         start_date = date.fromisoformat(data['start_date']) if data.get('start_date') else None
         end_date = date.fromisoformat(data['end_date']) if data.get('end_date') else None
         
@@ -742,11 +793,11 @@ async def view_shipments(callback: CallbackQuery, state: FSMContext, session: As
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.view_shipments)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка при загрузке истории отгрузок: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -757,7 +808,11 @@ async def view_shipments(callback: CallbackQuery, state: FSMContext, session: As
 # ПРОСМОТР ИСТОРИИ ОТХОДОВ
 # ============================================================================
 
-async def view_waste(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def view_waste(
+    query: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
     """
     Показывает историю отходов.
     """
@@ -779,14 +834,13 @@ async def view_waste(callback: CallbackQuery, state: FSMContext, session: AsyncS
         if data.get('warehouse_id'):
             filters.append(WasteRecord.warehouse_id == data['warehouse_id'])
         
-        # Конвертация ISO строк обратно в date
         if data.get('start_date'):
-            start_date = date.fromisoformat(data['start_date'])
-            filters.append(WasteRecord.created_at >= datetime.combine(start_date, datetime.min.time()))
+            start_dt = datetime.fromisoformat(data['start_date'])
+            filters.append(WasteRecord.created_at >= datetime.combine(start_dt.date(), datetime.min.time()))
         
         if data.get('end_date'):
-            end_date = date.fromisoformat(data['end_date'])
-            filters.append(WasteRecord.created_at <= datetime.combine(end_date, datetime.max.time()))
+            end_dt = datetime.fromisoformat(data['end_date'])
+            filters.append(WasteRecord.created_at <= datetime.combine(end_dt.date(), datetime.max.time()))
         
         if filters:
             stmt = stmt.where(and_(*filters))
@@ -858,11 +912,11 @@ async def view_waste(callback: CallbackQuery, state: FSMContext, session: AsyncS
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='hist_cancel')]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
         await state.set_state(HistoryStates.view_waste)
         
     except Exception as e:
-        await callback.message.edit_text(
+        await query.message.edit_text(
             f"❌ Ошибка при загрузке истории отходов: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
@@ -870,16 +924,90 @@ async def view_waste(callback: CallbackQuery, state: FSMContext, session: AsyncS
 
 
 # ============================================================================
-# ВОЗВРАТ К НАЧАЛУ
+# ОБНОВЛЕНИЕ ДАННЫХ ИЗ СОСТОЯНИЙ ПРОСМОТРА
+# ============================================================================
+
+@router.callback_query(HistoryStates.view_movements, F.data.startswith('hist_wh_'))
+async def refresh_movements(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Обновление данных движений."""
+    await select_warehouse_and_view(query, state, session)
+
+
+@router.callback_query(HistoryStates.view_production, F.data.startswith('hist_wh_'))
+async def refresh_production(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Обновление данных производства."""
+    await select_warehouse_and_view(query, state, session)
+
+
+@router.callback_query(HistoryStates.view_packing, F.data.startswith('hist_wh_'))
+async def refresh_packing(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Обновление данных фасовки."""
+    await select_warehouse_and_view(query, state, session)
+
+
+@router.callback_query(HistoryStates.view_shipments, F.data.startswith('hist_wh_'))
+async def refresh_shipments(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Обновление данных отгрузок."""
+    await select_warehouse_and_view(query, state, session)
+
+
+@router.callback_query(HistoryStates.view_waste, F.data.startswith('hist_wh_'))
+async def refresh_waste(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Обновление данных отходов."""
+    await select_warehouse_and_view(query, state, session)
+
+
+# ============================================================================
+# ВОЗВРАТ К ПРЕДЫДУЩИМ ШАГАМ
 # ============================================================================
 
 @router.callback_query(F.data == 'hist_start')
-async def back_to_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    """
-    Возвращает к начальному меню истории.
-    """
-    await callback.answer()
-    await start_history(callback, state, session)
+async def back_to_start(query: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    """Возвращает к начальному меню истории."""
+    await query.answer()
+    
+    # Сброс состояния и вызов start_history
+    await state.clear()
+    await start_history(query, state, session)
+
+
+@router.callback_query(HistoryStates.view_movements, F.data == 'hist_movements')
+async def back_to_movements_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к выбору периода для движений."""
+    await select_period_menu(query, state, 'movements')
+
+
+@router.callback_query(HistoryStates.view_production, F.data == 'hist_production')
+async def back_to_production_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к выбору периода для производства."""
+    await select_period_menu(query, state, 'production')
+
+
+@router.callback_query(HistoryStates.view_packing, F.data == 'hist_packing')
+async def back_to_packing_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к выбору периода для фасовки."""
+    await select_period_menu(query, state, 'packing')
+
+
+@router.callback_query(HistoryStates.view_shipments, F.data == 'hist_shipments')
+async def back_to_shipments_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к выбору периода для отгрузок."""
+    await select_period_menu(query, state, 'shipments')
+
+
+@router.callback_query(HistoryStates.view_waste, F.data == 'hist_waste')
+async def back_to_waste_period(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к выбору периода для отходов."""
+    await select_period_menu(query, state, 'waste')
+
+
+@router.callback_query(HistoryStates.select_warehouse, F.data.in_([
+    'hist_movements', 'hist_production', 'hist_packing', 'hist_shipments', 'hist_waste'
+]))
+async def back_from_warehouse_selection(query: CallbackQuery, state: FSMContext) -> None:
+    """Возврат из выбора склада к выбору периода."""
+    operation_type = query.data.replace('hist_', '')
+    await select_period_menu(query, state, operation_type)
 
 
 # ============================================================================
@@ -887,7 +1015,7 @@ async def back_to_start(callback: CallbackQuery, state: FSMContext, session: Asy
 # ============================================================================
 
 @router.callback_query(F.data == 'hist_cancel')
-@router.message(Command('cancel'), StateFilter(HistoryStates))
+@router.message(Command('cancel'))
 async def cancel_history(event: Union[Message, CallbackQuery], state: FSMContext) -> None:
     """
     Закрывает просмотр истории.
@@ -898,7 +1026,7 @@ async def cancel_history(event: Union[Message, CallbackQuery], state: FSMContext
     else:
         message = event
     
-    # Очистка данных FSM
+    # Очистка данных
     await state.clear()
     
     await message.answer(
