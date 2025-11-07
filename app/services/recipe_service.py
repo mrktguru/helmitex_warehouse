@@ -669,3 +669,6 @@ def delete_recipe(
     logger.info(f"ТК ID={recipe_id} удалена")
     
     return True
+
+# Alias для обратной совместимости
+get_recipe = get_recipe_by_id
