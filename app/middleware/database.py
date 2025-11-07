@@ -86,7 +86,7 @@ class DatabaseMiddleware(BaseMiddleware):
         event_type = self._get_event_type(event)
         
         # Создаем сессию БД
-        async with SessionLocal() as session:
+        async with session_maker() as session:
             # Добавляем сессию в data для передачи в handler
             data["session"] = session
             
@@ -319,7 +319,7 @@ class DatabaseSessionMiddleware(BaseMiddleware):
                 logger.error("❌ SessionLocal не инициализирован!")
                 return
         
-        async with SessionLocal() as session:
+        async with session_maker() as session:
             data["session"] = session
             
             try:
