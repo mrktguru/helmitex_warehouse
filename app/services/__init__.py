@@ -6,6 +6,8 @@
 
 Или импортировать конкретные функции:
     from app.services import create_recipe, execute_batch, ...
+    
+ИСПРАВЛЕНО: Удалены импорты несуществующих функций
 """
 
 # Импорт модулей сервисов
@@ -15,64 +17,84 @@ from . import barrel_service
 from . import packing_service
 from . import shipment_service
 
-# Для удобства можно импортировать часто используемые функции напрямую
-
-# Recipe Service
+# ============================================================================
+# RECIPE SERVICE - Импорт ТОЛЬКО существующих функций
+# ============================================================================
 from .recipe_service import (
     create_recipe,
-    get_recipe,
-    get_recipe_with_components,
+    get_recipe_by_id,
     get_recipes,
-    add_recipe_component,
-    update_recipe_component,
-    remove_recipe_component,
-    update_recipe,
+    get_active_recipes,
     activate_recipe,
     archive_recipe,
-    validate_recipe_components,
-    calculate_recipe_requirements,
-    get_recipe_statistics
+    update_recipe_status,
+    update_recipe,
+    update_recipe_components,
+    calculate_required_materials,
+    get_recipe_details_formatted,
+    validate_recipe,
+    can_activate_recipe,
+    delete_recipe,
 )
 
-# Production Service
+# ============================================================================
+# PRODUCTION SERVICE - Импорт ТОЛЬКО существующих функций
+# ============================================================================
 from .production_service import (
-    create_batch,
-    get_batch,
-    get_batches,
+    create_production_batch,
+    get_production_batch,
+    get_production_history,
     check_materials_availability,
-    execute_batch,
-    cancel_batch,
-    get_batch_statistics,
-    get_production_efficiency
+    recalculate_to_available,
+    execute_production,
+    cancel_production_batch,
+    get_production_statistics,
+    get_recipe_usage_frequency,
+    get_production_batch_details,
 )
 
-# Barrel Service
+# ============================================================================
+# BARREL SERVICE - Импорт ТОЛЬКО существующих функций
+# ============================================================================
 from .barrel_service import (
     create_barrel,
-    get_barrel,
+    get_barrel_by_id,
     get_barrels,
-    get_barrels_for_packing,
-    get_fifo_barrels,
+    get_active_barrels,
+    get_barrels_fifo,
+    calculate_barrel_distribution,
     update_barrel_weight,
-    mark_barrel_empty,
-    get_barrel_statistics
+    deactivate_barrel,
+    reactivate_barrel,
+    get_barrel_balance,
+    get_warehouse_barrels_summary,
+    get_barrel_usage_history,
+    find_oldest_barrel,
+    get_empty_barrels,
+    get_barrel_details,
 )
 
-# Packing Service
+# ============================================================================
+# PACKING SERVICE - Импорт ТОЛЬКО существующих функций
+# ============================================================================
 from .packing_service import (
     create_packing_variant,
     get_packing_variant,
     get_packing_variants,
-    update_packing_variant,
-    archive_packing_variant,
+    get_packing_variants_for_semi_product,
     calculate_available_for_packing,
     calculate_max_units,
     execute_packing,
+    execute_packing_by_variant,
     get_packing_history,
-    get_packing_statistics
+    get_packing_statistics,
+    validate_packing_request,
+    get_packing_suggestions,
 )
 
-# Shipment Service
+# ============================================================================
+# SHIPMENT SERVICE - Импорт ТОЛЬКО существующих функций
+# ============================================================================
 from .shipment_service import (
     create_recipient,
     get_recipients,
@@ -88,66 +110,81 @@ from .shipment_service import (
     cancel_shipment,
     get_shipments,
     get_shipment_statistics,
-    get_pending_shipments
+    get_pending_shipments,
 )
 
-# Список всех экспортируемых объектов
+
+# ============================================================================
+# СПИСОК ВСЕХ ЭКСПОРТИРУЕМЫХ ОБЪЕКТОВ
+# ============================================================================
 __all__ = [
-    # Модули
+    # Модули сервисов
     'recipe_service',
     'production_service',
     'barrel_service',
     'packing_service',
     'shipment_service',
     
-    # Recipe Service Functions
+    # Recipe Service Functions (14)
     'create_recipe',
-    'get_recipe',
-    'get_recipe_with_components',
+    'get_recipe_by_id',
     'get_recipes',
-    'add_recipe_component',
-    'update_recipe_component',
-    'remove_recipe_component',
-    'update_recipe',
+    'get_active_recipes',
     'activate_recipe',
     'archive_recipe',
-    'validate_recipe_components',
-    'calculate_recipe_requirements',
-    'get_recipe_statistics',
+    'update_recipe_status',
+    'update_recipe',
+    'update_recipe_components',
+    'calculate_required_materials',
+    'get_recipe_details_formatted',
+    'validate_recipe',
+    'can_activate_recipe',
+    'delete_recipe',
     
-    # Production Service Functions
-    'create_batch',
-    'get_batch',
-    'get_batches',
+    # Production Service Functions (10)
+    'create_production_batch',
+    'get_production_batch',
+    'get_production_history',
     'check_materials_availability',
-    'execute_batch',
-    'cancel_batch',
-    'get_batch_statistics',
-    'get_production_efficiency',
+    'recalculate_to_available',
+    'execute_production',
+    'cancel_production_batch',
+    'get_production_statistics',
+    'get_recipe_usage_frequency',
+    'get_production_batch_details',
     
-    # Barrel Service Functions
+    # Barrel Service Functions (15)
     'create_barrel',
-    'get_barrel',
+    'get_barrel_by_id',
     'get_barrels',
-    'get_barrels_for_packing',
-    'get_fifo_barrels',
+    'get_active_barrels',
+    'get_barrels_fifo',
+    'calculate_barrel_distribution',
     'update_barrel_weight',
-    'mark_barrel_empty',
-    'get_barrel_statistics',
+    'deactivate_barrel',
+    'reactivate_barrel',
+    'get_barrel_balance',
+    'get_warehouse_barrels_summary',
+    'get_barrel_usage_history',
+    'find_oldest_barrel',
+    'get_empty_barrels',
+    'get_barrel_details',
     
-    # Packing Service Functions
+    # Packing Service Functions (12)
     'create_packing_variant',
     'get_packing_variant',
     'get_packing_variants',
-    'update_packing_variant',
-    'archive_packing_variant',
+    'get_packing_variants_for_semi_product',
     'calculate_available_for_packing',
     'calculate_max_units',
     'execute_packing',
+    'execute_packing_by_variant',
     'get_packing_history',
     'get_packing_statistics',
+    'validate_packing_request',
+    'get_packing_suggestions',
     
-    # Shipment Service Functions
+    # Shipment Service Functions (15)
     'create_recipient',
     'get_recipients',
     'update_recipient',
@@ -166,9 +203,15 @@ __all__ = [
 ]
 
 
-# Версия API сервисов
-__version__ = '1.0.0'
+# ============================================================================
+# ВЕРСИЯ API
+# ============================================================================
+__version__ = '1.0.0-fixed'
 
+
+# ============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================================
 
 def get_all_services():
     """
@@ -197,22 +240,23 @@ def get_service_info():
         'recipe_service': {
             'description': 'Управление технологическими картами и рецептами',
             'functions': [
-                'create_recipe', 'get_recipe', 'get_recipes',
-                'add_recipe_component', 'update_recipe', 'archive_recipe'
+                'create_recipe', 'get_recipe_by_id', 'get_recipes',
+                'update_recipe', 'activate_recipe', 'archive_recipe',
+                'validate_recipe', 'calculate_required_materials'
             ]
         },
         'production_service': {
             'description': 'Управление производственными партиями и замесами',
             'functions': [
-                'create_batch', 'get_batch', 'get_batches',
-                'execute_batch', 'cancel_batch', 'get_batch_statistics'
+                'create_production_batch', 'get_production_batch', 'get_production_history',
+                'execute_production', 'cancel_production_batch', 'get_production_statistics'
             ]
         },
         'barrel_service': {
             'description': 'Управление бочками с полуфабрикатами',
             'functions': [
-                'create_barrel', 'get_barrel', 'get_barrels',
-                'get_fifo_barrels', 'update_barrel_weight', 'mark_barrel_empty'
+                'create_barrel', 'get_barrel_by_id', 'get_barrels',
+                'get_barrels_fifo', 'update_barrel_weight', 'deactivate_barrel'
             ]
         },
         'packing_service': {
