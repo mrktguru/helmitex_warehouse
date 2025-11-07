@@ -1,7 +1,7 @@
 """
 Сервис для работы с остатками на складе.
 """
-from typing import List, Optional
+from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime
