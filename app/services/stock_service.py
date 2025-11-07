@@ -114,3 +114,296 @@ def get_total_stock_value(db: Session, warehouse_id: int = None) -> dict:
         'total_items': total_items,
         'total_quantity': total_quantity
     }
+
+# ===================================================================
+# ДОБАВИТЬ В КОНЕЦ ФАЙЛА app/services/stock_service.py
+# ===================================================================
+
+# ============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ HANDLERS (NEW!)
+# ============================================================================
+
+def calculate_stock_availability(
+    db: Session,
+    warehouse_id: int,
+    sku_id: int
+) -> Dict:
+    """
+    Расчёт доступности остатков с учётом резервов.
+    
+    Args:
+        db: Сессия БД
+        warehouse_id: ID склада
+        sku_id: ID номенклатуры
+        
+    Returns:
+        Dict: {
+            'total_quantity': float,
+            'reserved_quantity': float,
+            'available_quantity': float
+        }
+    """
+    from app.database.models import InventoryReserve
+    from sqlalchemy import func
+    
+    # Получаем общий остаток
+    stock = get_stock(db, warehouse_id, sku_id)
+    total_quantity = stock.quantity if stock else 0.0
+    
+    # Получаем зарезервированное количество
+    reserved_query = select(func.sum(InventoryReserve.quantity)).where(
+        and_(
+            InventoryReserve.warehouse_id == warehouse_id,
+            InventoryReserve.sku_id == sku_id,
+            InventoryReserve.is_active == True
+        )
+    )
+    reserved_quantity = db.execute(reserved_query).scalar() or 0.0
+    
+    # Доступное = общее - зарезервированное
+    available_quantity = total_quantity - reserved_quantity
+    
+    logger.debug(
+        f"Доступность SKU {sku_id} на складе {warehouse_id}: "
+        f"total={total_quantity}, reserved={reserved_quantity}, available={available_quantity}"
+    )
+    
+    return {
+        'total_quantity': total_quantity,
+        'reserved_quantity': reserved_quantity,
+        'available_quantity': max(0, available_quantity)
+    }
+
+
+def create_sku(
+    db: Session,
+    code: str,
+    name: str,
+    type: 'SKUType',
+    unit: 'Unit' = None,
+    category: 'Category' = None,
+    min_stock: float = 0.0,
+    description: str = None
+) -> 'SKU':
+    """
+    Создание новой номенклатуры.
+    
+    Args:
+        db: Сессия БД
+        code: Артикул/код
+        name: Название
+        type: Тип (raw/semi/finished)
+        unit: Единица измерения
+        category: Категория
+        min_stock: Минимальный остаток
+        description: Описание
+        
+    Returns:
+        SKU: Созданная номенклатура
+    """
+    from app.database.models import SKU
+    
+    # Проверка на дубликат кода
+    existing = db.execute(
+        select(SKU).where(SKU.code == code)
+    ).scalar_one_or_none()
+    
+    if existing:
+        raise ValueError(f"Номенклатура с кодом '{code}' уже существует")
+    
+    sku = SKU(
+        code=code,
+        name=name,
+        type=type,
+        unit=unit,
+        category=category,
+        min_stock=min_stock,
+        description=description
+    )
+    
+    db.add(sku)
+    db.flush()
+    db.refresh(sku)
+    
+    logger.info(f"Создана номенклатура: {code} - {name} (ID={sku.id})")
+    
+    return sku
+
+
+def get_all_skus(db: Session) -> List['SKU']:
+    """Получить всю номенклатуру."""
+    from app.database.models import SKU
+    
+    skus = db.execute(select(SKU)).scalars().all()
+    logger.debug(f"Найдено {len(skus)} номенклатур")
+    return list(skus)
+
+
+def get_all_stock_by_warehouse(
+    db: Session,
+    warehouse_id: int,
+    type: 'SKUType' = None
+) -> List[Stock]:
+    """
+    Получить все остатки на складе с возможностью фильтрации по типу.
+    
+    Args:
+        db: Сессия БД
+        warehouse_id: ID склада
+        type: Фильтр по типу номенклатуры (опционально)
+        
+    Returns:
+        List[Stock]: Список остатков
+    """
+    from app.database.models import SKU
+    
+    query = select(Stock).where(Stock.warehouse_id == warehouse_id)
+    
+    # Если нужна фильтрация по типу
+    if type:
+        query = query.join(SKU).where(SKU.type == type)
+    
+    stocks = db.execute(query).scalars().all()
+    logger.debug(f"Найдено {len(stocks)} остатков на складе {warehouse_id}")
+    return list(stocks)
+
+
+def get_sku(db: Session, sku_id: int) -> Optional['SKU']:
+    """Получить номенклатуру по ID."""
+    from app.database.models import SKU
+    
+    return db.execute(
+        select(SKU).where(SKU.id == sku_id)
+    ).scalar_one_or_none()
+
+
+def get_skus_by_type(
+    db: Session,
+    type: 'SKUType'
+) -> List['SKU']:
+    """
+    Получить номенклатуру по типу.
+    
+    Args:
+        db: Сессия БД
+        type: Тип (raw/semi/finished)
+        
+    Returns:
+        List[SKU]: Список номенклатур
+    """
+    from app.database.models import SKU
+    
+    skus = db.execute(
+        select(SKU).where(SKU.type == type)
+    ).scalars().all()
+    
+    logger.debug(f"Найдено {len(skus)} номенклатур типа {type.value}")
+    return list(skus)
+
+
+def get_stock_by_warehouse_and_type(
+    db: Session,
+    warehouse_id: int,
+    type: 'SKUType'
+) -> List[Stock]:
+    """
+    Получить остатки на складе по типу номенклатуры.
+    
+    Args:
+        db: Сессия БД
+        warehouse_id: ID склада
+        type: Тип номенклатуры (raw/semi/finished)
+        
+    Returns:
+        List[Stock]: Список остатков
+    """
+    from app.database.models import SKU
+    
+    stocks = db.execute(
+        select(Stock).join(SKU).where(
+            and_(
+                Stock.warehouse_id == warehouse_id,
+                SKU.type == type
+            )
+        )
+    ).scalars().all()
+    
+    logger.debug(
+        f"Найдено {len(stocks)} остатков типа {type.value} на складе {warehouse_id}"
+    )
+    return list(stocks)
+
+
+def get_stock_quantity(
+    db: Session,
+    warehouse_id: int,
+    sku_id: int
+) -> float:
+    """
+    Получить количество остатка.
+    
+    Args:
+        db: Сессия БД
+        warehouse_id: ID склада
+        sku_id: ID номенклатуры
+        
+    Returns:
+        float: Количество (0.0 если остаток не найден)
+    """
+    stock = get_stock(db, warehouse_id, sku_id)
+    return stock.quantity if stock else 0.0
+
+
+def receive_materials(
+    db: Session,
+    warehouse_id: int,
+    sku_id: int,
+    quantity: float,
+    user_id: int,
+    notes: str = None
+) -> Stock:
+    """
+    Приёмка материалов на склад (приход).
+    
+    Args:
+        db: Сессия БД
+        warehouse_id: ID склада
+        sku_id: ID номенклатуры
+        quantity: Количество
+        user_id: ID пользователя
+        notes: Примечания
+        
+    Returns:
+        Stock: Обновлённый остаток
+        
+    Raises:
+        ValueError: Если quantity <= 0
+    """
+    from app.database.models import Movement, MovementType
+    
+    if quantity <= 0:
+        raise ValueError("Количество должно быть положительным")
+    
+    # Обновляем остаток
+    stock = update_stock(db, warehouse_id, sku_id, quantity)
+    
+    # Создаем movement (приход)
+    movement = Movement(
+        warehouse_id=warehouse_id,
+        sku_id=sku_id,
+        type=MovementType.receipt,
+        quantity=quantity,
+        user_id=user_id,
+        notes=notes or "Приёмка материалов"
+    )
+    db.add(movement)
+    
+    db.flush()
+    db.refresh(stock)
+    
+    logger.info(
+        f"Приёмка: склад={warehouse_id}, SKU={sku_id}, "
+        f"количество={quantity}, пользователь={user_id}"
+    )
+    
+    return stock
