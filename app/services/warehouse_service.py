@@ -1,5 +1,7 @@
 """
 Сервис для работы со складами.
+
+ИСПРАВЛЕНО: Добавлена функция get_warehouses() с параметром active_only
 """
 from typing import List, Optional
 from sqlalchemy.orm import Session
@@ -55,6 +57,29 @@ def get_default_warehouse(db: Session) -> Optional[Warehouse]:
 def get_all_warehouses(db: Session) -> List[Warehouse]:
     """Получить все склады."""
     return db.execute(select(Warehouse)).scalars().all()
+
+
+def get_warehouses(
+    db: Session,
+    active_only: bool = True
+) -> List[Warehouse]:
+    """
+    Получить список складов с фильтрацией.
+    
+    Args:
+        db: Сессия БД
+        active_only: Только активные склады (в данной модели все склады активны)
+        
+    Returns:
+        List[Warehouse]: Список складов
+        
+    Note:
+        В текущей модели все склады считаются активными.
+        Параметр active_only добавлен для совместимости с handlers.
+    """
+    # В текущей модели Warehouse нет поля is_active
+    # Поэтому возвращаем все склады
+    return get_all_warehouses(db)
 
 
 def update_warehouse(
