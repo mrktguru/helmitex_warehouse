@@ -672,3 +672,4 @@ def delete_recipe(
 
 # Alias для обратной совместимости
 get_recipe = get_recipe_by_id
+get_recipe_with_components = get_recipe_by_id
