@@ -314,9 +314,10 @@ class DatabaseSessionMiddleware(BaseMiddleware):
         Returns:
             Any: Результат выполнения handler
         """
-        if SessionLocal is None:
-            logger.error("❌ SessionLocal не инициализирован!")
-            return
+            session_maker = SessionLocal or get_session_maker()
+            if session_maker is None:
+                logger.error("❌ SessionLocal не инициализирован!")
+                return
         
         async with SessionLocal() as session:
             data["session"] = session
