@@ -4,12 +4,17 @@
 Модуль содержит все математические и логические расчеты:
 - Расчет потребности сырья по рецепту
 - FIFO-распределение по бочкам
+- FIFO-логика для отгрузки готовой продукции
 - Расчет максимального количества упаковок
 - Пересчет под доступное сырье
 - Валидация процентов и сумм
 """
 from typing import Dict, List, Tuple, Optional
 from decimal import Decimal, ROUND_HALF_UP
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database.models import Stock, InventoryReserve
 from app.logger import get_logger
 
 logger = get_logger("calculations")
@@ -297,6 +302,178 @@ def calculate_packing_remainder(
     remainder = total_weight - used
     
     return round(remainder, 2)
+
+
+# ============================================================================
+# FIFO-РАСЧЕТЫ ДЛЯ ОТГРУЗКИ
+# ============================================================================
+
+async def get_fifo_stock_for_shipment(
+    session: AsyncSession,
+    warehouse_id: int,
+    sku_id: int,
+    required_quantity: float
+) -> List[Dict]:
+    """
+    Получает FIFO-остатки готовой продукции для отгрузки.
+    
+    Алгоритм:
+    1. Загружает все остатки Stock для склада и SKU
+    2. Сортирует по created_at (FIFO - самые старые первыми)
+    3. Для каждого остатка вычисляет доступное количество:
+       available = stock.quantity - reserved_quantity
+    4. Возвращает список остатков до тех пор, пока сумма >= required_quantity
+    
+    Args:
+        session: AsyncSession для работы с БД
+        warehouse_id: ID склада
+        sku_id: ID готовой продукции (SKU)
+        required_quantity: Требуемое количество для отгрузки
+        
+    Returns:
+        List[Dict]: Список остатков в формате:
+            [
+                {
+                    'stock': Stock,  # Объект модели Stock
+                    'available_quantity': float,  # Доступное количество
+                    'reserved_quantity': float  # Зарезервированное количество
+                },
+                ...
+            ]
+            Отсортировано по FIFO (created_at ASC)
+            
+    Raises:
+        ValueError: Если warehouse_id или sku_id не заданы
+        ValueError: Если required_quantity <= 0
+        
+    Example:
+        >>> fifo_stocks = await get_fifo_stock_for_shipment(
+        ...     session,
+        ...     warehouse_id=1,
+        ...     sku_id=15,
+        ...     required_quantity=50.0
+        ... )
+        >>> for stock_info in fifo_stocks:
+        ...     print(f"Stock ID={stock_info['stock'].id}, "
+        ...           f"Available={stock_info['available_quantity']}")
+        Stock ID=5, Available=30.0
+        Stock ID=8, Available=25.0
+    """
+    # Валидация входных параметров
+    if not warehouse_id:
+        raise ValueError("warehouse_id обязателен")
+    
+    if not sku_id:
+        raise ValueError("sku_id обязателен")
+    
+    if required_quantity <= 0:
+        raise ValueError(f"required_quantity должно быть > 0, получено: {required_quantity}")
+    
+    logger.info(
+        f"FIFO запрос: warehouse_id={warehouse_id}, sku_id={sku_id}, "
+        f"required={required_quantity}"
+    )
+    
+    # Шаг 1: Загрузка всех остатков для данного склада и SKU
+    # Сортировка по created_at (FIFO) - самые старые записи первыми
+    stmt = select(Stock).where(
+        and_(
+            Stock.warehouse_id == warehouse_id,
+            Stock.sku_id == sku_id,
+            Stock.quantity > 0  # Только непустые остатки
+        )
+    ).order_by(Stock.created_at.asc())  # FIFO: First In, First Out
+    
+    result = await session.execute(stmt)
+    stocks = result.scalars().all()
+    
+    if not stocks:
+        logger.warning(
+            f"Нет остатков для warehouse_id={warehouse_id}, sku_id={sku_id}"
+        )
+        return []
+    
+    logger.debug(f"Найдено остатков: {len(stocks)}")
+    
+    # Шаг 2: Загрузка активных резервов для данного склада и SKU
+    reserve_stmt = select(InventoryReserve).where(
+        and_(
+            InventoryReserve.warehouse_id == warehouse_id,
+            InventoryReserve.sku_id == sku_id,
+            InventoryReserve.is_active == True  # Только активные резервы
+        )
+    )
+    
+    reserve_result = await session.execute(reserve_stmt)
+    reserves = reserve_result.scalars().all()
+    
+    # Подсчет общего зарезервированного количества
+    total_reserved = sum(reserve.quantity for reserve in reserves)
+    
+    logger.debug(f"Активных резервов: {len(reserves)}, total_reserved={total_reserved}")
+    
+    # Шаг 3: Формирование списка FIFO-остатков с доступным количеством
+    fifo_stocks = []
+    accumulated_quantity = 0.0
+    
+    # Распределение резервов по остаткам (пропорционально количеству)
+    total_quantity = sum(stock.quantity for stock in stocks)
+    
+    for stock in stocks:
+        # Вычисляем долю резерва для этого остатка
+        if total_reserved > 0 and total_quantity > 0:
+            stock_reserved = (stock.quantity / total_quantity) * total_reserved
+            stock_reserved = round(stock_reserved, 2)  # Округляем до 2 знаков
+        else:
+            stock_reserved = 0.0
+        
+        # Доступное количество = остаток - резерв
+        available = stock.quantity - stock_reserved
+        
+        # Защита от отрицательных значений
+        if available < 0:
+            available = 0.0
+        
+        # Пропускаем остатки без доступного количества
+        if available <= 0:
+            logger.debug(
+                f"Stock ID={stock.id}: quantity={stock.quantity}, "
+                f"reserved={stock_reserved}, available=0 (пропущено)"
+            )
+            continue
+        
+        # Добавляем в результат
+        fifo_stocks.append({
+            'stock': stock,
+            'available_quantity': round(available, 2),
+            'reserved_quantity': round(stock_reserved, 2)
+        })
+        
+        accumulated_quantity += available
+        
+        logger.debug(
+            f"Stock ID={stock.id}: quantity={stock.quantity}, "
+            f"reserved={stock_reserved}, available={available}"
+        )
+        
+        # Оптимизация: прерываем, если накопили достаточно
+        # +10% запас для учета погрешностей округления
+        if accumulated_quantity >= required_quantity * 1.1:
+            break
+    
+    # Логирование итогов
+    total_available = sum(item['available_quantity'] for item in fifo_stocks)
+    logger.info(
+        f"FIFO результат: {len(fifo_stocks)} остатков, "
+        f"total_available={total_available}, required={required_quantity}"
+    )
+    
+    if total_available < required_quantity:
+        logger.warning(
+            f"Недостаточно доступного количества: {total_available} < {required_quantity}"
+        )
+    
+    return fifo_stocks
 
 
 # ============================================================================
