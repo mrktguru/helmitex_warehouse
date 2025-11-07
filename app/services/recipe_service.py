@@ -56,17 +56,6 @@ def create_recipe(
         
     Raises:
         ValueError: Если данные невалидны
-        
-    Example:
-        >>> create_recipe(
-        ...     db, "Краска белая", semi_product_id=10, yield_percent=85.0,
-        ...     components=[
-        ...         {'raw_material_id': 1, 'percentage': 45.5, 'order': 1},
-        ...         {'raw_material_id': 2, 'percentage': 30.0, 'order': 2},
-        ...         {'raw_material_id': 3, 'percentage': 24.5, 'order': 3}
-        ...     ],
-        ...     created_by=123456789
-        ... )
     """
     logger.info(f"Создание ТК '{name}' для полуфабриката ID={semi_product_id}")
     
@@ -430,6 +419,82 @@ def update_recipe_components(
     return recipe
 
 
+def add_recipe_component(
+    db: Session,
+    recipe_id: int,
+    raw_material_id: int,
+    percentage: float,
+    order: int = 0
+) -> RecipeComponent:
+    """
+    Добавить компонент в существующий рецепт.
+    
+    Args:
+        db: Сессия БД
+        recipe_id: ID рецепта
+        raw_material_id: ID сырья
+        percentage: Процент компонента (0-100)
+        order: Порядок добавления
+        
+    Returns:
+        RecipeComponent: Созданный компонент
+        
+    Raises:
+        ValueError: Если данные невалидны
+    """
+    # Проверка существования рецепта
+    recipe = get_recipe_by_id(db, recipe_id, load_components=True)
+    if not recipe:
+        raise ValueError(f"ТК с ID={recipe_id} не найдена")
+    
+    # Проверка что сырье существует и является сырьем
+    raw_material = db.get(SKU, raw_material_id)
+    if not raw_material:
+        raise ValueError(f"Сырье с ID={raw_material_id} не найдено")
+    
+    if raw_material.type != SKUType.raw:
+        raise ValueError(f"SKU ID={raw_material_id} не является сырьем")
+    
+    # Проверка процента
+    if percentage <= 0 or percentage > 100:
+        raise ValueError(f"Процент должен быть от 0 до 100, получено: {percentage}")
+    
+    # Проверка на дубликат
+    existing = db.execute(
+        select(RecipeComponent).where(
+            and_(
+                RecipeComponent.recipe_id == recipe_id,
+                RecipeComponent.raw_material_id == raw_material_id
+            )
+        )
+    ).scalar_one_or_none()
+    
+    if existing:
+        raise ValueError(
+            f"Компонент {raw_material.name} уже есть в рецепте. "
+            "Используйте update_recipe_component для изменения."
+        )
+    
+    # Создание компонента
+    component = RecipeComponent(
+        recipe_id=recipe_id,
+        raw_material_id=raw_material_id,
+        percentage=percentage,
+        order=order
+    )
+    
+    db.add(component)
+    db.commit()
+    db.refresh(component)
+    
+    logger.info(
+        f"Компонент добавлен в ТК ID={recipe_id}: "
+        f"{raw_material.name} ({percentage}%)"
+    )
+    
+    return component
+
+
 # ============================================================================
 # РАСЧЕТЫ ПО РЕЦЕПТАМ
 # ============================================================================
@@ -670,6 +735,13 @@ def delete_recipe(
     
     return True
 
-# Alias для обратной совместимости
+
+# ============================================================================
+# ALIASES ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
+# ============================================================================
+
+# Alias: get_recipe = get_recipe_by_id
 get_recipe = get_recipe_by_id
+
+# Alias: get_recipe_with_components = get_recipe_by_id (с load_components=True по умолчанию)
 get_recipe_with_components = get_recipe_by_id
