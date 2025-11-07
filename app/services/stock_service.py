@@ -393,3 +393,4 @@ def receive_materials(
     )
     
     return stock
+ 
