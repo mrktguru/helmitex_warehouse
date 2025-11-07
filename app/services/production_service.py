@@ -7,6 +7,11 @@
 - Пересчет под доступное сырье
 - Выполнение производства (списание сырья, создание бочек)
 - История производства
+
+ИСПРАВЛЕНО: Добавлены aliases для совместимости с handlers:
+- create_batch = create_production_batch
+- execute_batch = execute_production
+- get_batches = get_production_history
 """
 from typing import List, Optional, Dict, Tuple
 from datetime import datetime
@@ -689,3 +694,17 @@ def get_production_batch_details(
         'barrels': barrels_info,
         'barrels_count': len(barrels_info)
     }
+
+
+# ============================================================================
+# ALIASES ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
+# ============================================================================
+
+# Alias: create_batch = create_production_batch
+create_batch = create_production_batch
+
+# Alias: execute_batch = execute_production
+execute_batch = execute_production
+
+# Alias: get_batches = get_production_history
+get_batches = get_production_history
