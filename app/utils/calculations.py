@@ -305,6 +305,159 @@ def calculate_packing_remainder(
 
 
 # ============================================================================
+# РАСЧЁТЫ ДОСТУПНОСТИ ОСТАТКОВ
+# ============================================================================
+
+async def calculate_stock_availability(
+    session: AsyncSession,
+    warehouse_id: int,
+    sku_id: int
+) -> Dict:
+    """
+    Рассчитывает доступное количество товара на складе с учётом резервов.
+    
+    Формула:
+    available = total_quantity - reserved_quantity
+    
+    Где:
+    - total_quantity: сумма всех Stock.quantity для данного склада и SKU
+    - reserved_quantity: сумма всех активных InventoryReserve.quantity
+    
+    Args:
+        session: AsyncSession для работы с БД
+        warehouse_id: ID склада
+        sku_id: ID товара (SKU)
+        
+    Returns:
+        Dict: {
+            'total': float,      # Общее количество на складе
+            'reserved': float,   # Зарезервированное количество
+            'available': float,  # Доступное для операций (total - reserved)
+            'warehouse_id': int,
+            'sku_id': int
+        }
+        
+    Example:
+        >>> availability = await calculate_stock_availability(
+        ...     session,
+        ...     warehouse_id=1,
+        ...     sku_id=15
+        ... )
+        >>> print(f"Доступно: {availability['available']} из {availability['total']}")
+        Доступно: 45.0 из 50.0
+    """
+    # Валидация входных параметров
+    if not warehouse_id:
+        raise ValueError("warehouse_id обязателен")
+    
+    if not sku_id:
+        raise ValueError("sku_id обязателен")
+    
+    logger.debug(
+        f"Расчёт доступности: warehouse_id={warehouse_id}, sku_id={sku_id}"
+    )
+    
+    # Шаг 1: Получение общего количества на складе
+    # Суммируем все Stock записи для данного склада и SKU
+    stmt = select(Stock).where(
+        and_(
+            Stock.warehouse_id == warehouse_id,
+            Stock.sku_id == sku_id,
+            Stock.quantity > 0  # Только непустые остатки
+        )
+    )
+    
+    result = await session.execute(stmt)
+    stocks = result.scalars().all()
+    
+    # Подсчёт общего количества
+    total_quantity = sum(stock.quantity for stock in stocks)
+    
+    logger.debug(f"Total quantity: {total_quantity} (из {len(stocks)} записей Stock)")
+    
+    # Шаг 2: Получение зарезервированного количества
+    # Суммируем все активные резервы
+    reserve_stmt = select(InventoryReserve).where(
+        and_(
+            InventoryReserve.warehouse_id == warehouse_id,
+            InventoryReserve.sku_id == sku_id,
+            InventoryReserve.is_active == True  # Только активные резервы
+        )
+    )
+    
+    reserve_result = await session.execute(reserve_stmt)
+    reserves = reserve_result.scalars().all()
+    
+    # Подсчёт зарезервированного количества
+    reserved_quantity = sum(reserve.quantity for reserve in reserves)
+    
+    logger.debug(f"Reserved quantity: {reserved_quantity} (из {len(reserves)} резервов)")
+    
+    # Шаг 3: Расчёт доступного количества
+    available_quantity = total_quantity - reserved_quantity
+    
+    # Защита от отрицательных значений
+    if available_quantity < 0:
+        logger.warning(
+            f"Отрицательная доступность: {available_quantity} "
+            f"(total={total_quantity}, reserved={reserved_quantity}). "
+            "Установлено в 0."
+        )
+        available_quantity = 0.0
+    
+    # Формирование результата
+    result_dict = {
+        'total': round(total_quantity, 2),
+        'reserved': round(reserved_quantity, 2),
+        'available': round(available_quantity, 2),
+        'warehouse_id': warehouse_id,
+        'sku_id': sku_id
+    }
+    
+    logger.info(
+        f"Доступность: total={result_dict['total']}, "
+        f"reserved={result_dict['reserved']}, "
+        f"available={result_dict['available']}"
+    )
+    
+    return result_dict
+
+
+def validate_quantity(
+    quantity: float,
+    min_value: float = 0.001
+) -> bool:
+    """
+    Проверяет корректность количества.
+    
+    Args:
+        quantity: Проверяемое количество
+        min_value: Минимально допустимое значение
+        
+    Returns:
+        bool: True если количество корректно
+        
+    Example:
+        >>> validate_quantity(10.5)
+        True
+        >>> validate_quantity(-5.0)
+        False
+        >>> validate_quantity(0.0)
+        False
+    """
+    if quantity is None:
+        return False
+    
+    if not isinstance(quantity, (int, float)):
+        return False
+    
+    if quantity < min_value:
+        return False
+    
+    return True
+
+
+# ============================================================================
 # FIFO-РАСЧЕТЫ ДЛЯ ОТГРУЗКИ
 # ============================================================================
 
