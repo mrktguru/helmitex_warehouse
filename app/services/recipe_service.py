@@ -7,13 +7,22 @@
 - Расчет потребности сырья по рецепту
 - Активация/архивация рецептов
 - Валидация рецептов
+
+ИСПРАВЛЕНО: Добавлены недостающие функции:
+- update_recipe_component
+- remove_recipe_component
+- get_recipe_statistics
+- validate_recipe_components (alias)
+- calculate_recipe_requirements (alias)
 """
 from typing import List, Optional, Dict, Tuple
+from decimal import Decimal
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, func
 
 from app.database.models import (
-    TechnologicalCard, RecipeComponent, SKU, SKUType, RecipeStatus
+    TechnologicalCard, RecipeComponent, SKU, SKUType, RecipeStatus, ProductionBatch
 )
 from app.utils.calculations import (
     calculate_raw_materials_required,
@@ -419,6 +428,10 @@ def update_recipe_components(
     return recipe
 
 
+# ============================================================================
+# УПРАВЛЕНИЕ ОТДЕЛЬНЫМИ КОМПОНЕНТАМИ (NEW!)
+# ============================================================================
+
 def add_recipe_component(
     db: Session,
     recipe_id: int,
@@ -493,6 +506,91 @@ def add_recipe_component(
     )
     
     return component
+
+
+def update_recipe_component(
+    db: Session,
+    component_id: int,
+    percentage: float = None,
+    raw_material_id: int = None,
+    order: int = None
+) -> RecipeComponent:
+    """
+    Обновление отдельного компонента рецепта.
+    
+    Args:
+        db: Сессия БД
+        component_id: ID компонента
+        percentage: Новый процент (опционально)
+        raw_material_id: Новый ID сырья (опционально)
+        order: Новый порядок (опционально)
+        
+    Returns:
+        RecipeComponent: Обновлённый компонент
+        
+    Raises:
+        ValueError: Если компонент не найден или данные невалидны
+    """
+    # Получаем компонент
+    component = db.get(RecipeComponent, component_id)
+    if not component:
+        raise ValueError(f"Компонент с ID={component_id} не найден")
+    
+    # Обновляем процент
+    if percentage is not None:
+        if percentage <= 0 or percentage > 100:
+            raise ValueError(f"Процент должен быть от 0 до 100, получено: {percentage}")
+        component.percentage = percentage
+    
+    # Обновляем сырьё
+    if raw_material_id is not None:
+        raw_material = db.get(SKU, raw_material_id)
+        if not raw_material:
+            raise ValueError(f"Сырье с ID={raw_material_id} не найдено")
+        
+        if raw_material.type != SKUType.raw:
+            raise ValueError(f"SKU ID={raw_material_id} не является сырьем")
+        
+        component.raw_material_id = raw_material_id
+    
+    # Обновляем порядок
+    if order is not None:
+        component.order = order
+    
+    db.commit()
+    db.refresh(component)
+    
+    logger.info(f"Компонент ID={component_id} обновлён")
+    
+    return component
+
+
+def remove_recipe_component(
+    db: Session,
+    component_id: int
+) -> bool:
+    """
+    Удаление компонента из рецепта.
+    
+    Args:
+        db: Сессия БД
+        component_id: ID компонента
+        
+    Returns:
+        bool: True если удалён, False если не найден
+    """
+    component = db.get(RecipeComponent, component_id)
+    if not component:
+        logger.warning(f"Компонент с ID={component_id} не найден")
+        return False
+    
+    recipe_id = component.recipe_id
+    db.delete(component)
+    db.commit()
+    
+    logger.info(f"Компонент ID={component_id} удалён из ТК ID={recipe_id}")
+    
+    return True
 
 
 # ============================================================================
@@ -589,6 +687,66 @@ def get_recipe_details_formatted(
         'created_at': recipe.created_at,
         'updated_at': recipe.updated_at
     }
+
+
+# ============================================================================
+# СТАТИСТИКА РЕЦЕПТОВ (NEW!)
+# ============================================================================
+
+def get_recipe_statistics(
+    db: Session,
+    recipe_id: int = None
+) -> Dict:
+    """
+    Возвращает статистику по рецептам.
+    
+    Args:
+        db: Сессия БД
+        recipe_id: ID рецепта (если None - общая статистика)
+        
+    Returns:
+        dict: Статистика рецепта или всех рецептов
+    """
+    if recipe_id:
+        # Статистика конкретного рецепта
+        recipe = get_recipe_by_id(db, recipe_id, load_components=True)
+        if not recipe:
+            raise ValueError(f"ТК с ID={recipe_id} не найдена")
+        
+        # Количество использований
+        usage_count = db.execute(
+            select(func.count(ProductionBatch.id)).where(
+                ProductionBatch.recipe_id == recipe_id
+            )
+        ).scalar() or 0
+        
+        # Количество компонентов
+        components_count = len(recipe.components)
+        
+        return {
+            'recipe_id': recipe_id,
+            'recipe_name': recipe.name,
+            'usage_count': usage_count,
+            'components_count': components_count,
+            'is_active': recipe.status == RecipeStatus.active
+        }
+    else:
+        # Общая статистика
+        total_recipes = db.execute(
+            select(func.count(TechnologicalCard.id))
+        ).scalar() or 0
+        
+        active_recipes = db.execute(
+            select(func.count(TechnologicalCard.id)).where(
+                TechnologicalCard.status == RecipeStatus.active
+            )
+        ).scalar() or 0
+        
+        return {
+            'total_recipes': total_recipes,
+            'active_recipes': active_recipes,
+            'archived_recipes': total_recipes - active_recipes
+        }
 
 
 # ============================================================================
@@ -745,3 +903,9 @@ get_recipe = get_recipe_by_id
 
 # Alias: get_recipe_with_components = get_recipe_by_id (с load_components=True по умолчанию)
 get_recipe_with_components = get_recipe_by_id
+
+# Alias: validate_recipe_components = validate_recipe (для совместимости с __init__.py)
+validate_recipe_components = validate_recipe
+
+# Alias: calculate_recipe_requirements = calculate_required_materials (для совместимости с __init__.py)
+calculate_recipe_requirements = calculate_required_materials
