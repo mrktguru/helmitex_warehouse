@@ -1,9 +1,11 @@
 """
 Сервис для работы с остатками на складе.
+
+ИСПРАВЛЕНО: Добавлены недостающие функции для handlers
 """
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, and_, func
 from datetime import datetime
 
 from app.database.models import Stock, SKU, Warehouse
@@ -115,9 +117,6 @@ def get_total_stock_value(db: Session, warehouse_id: int = None) -> dict:
         'total_quantity': total_quantity
     }
 
-# ===================================================================
-# ДОБАВИТЬ В КОНЕЦ ФАЙЛА app/services/stock_service.py
-# ===================================================================
 
 # ============================================================================
 # ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ HANDLERS (NEW!)
@@ -144,7 +143,6 @@ def calculate_stock_availability(
         }
     """
     from app.database.models import InventoryReserve
-    from sqlalchemy import func
     
     # Получаем общий остаток
     stock = get_stock(db, warehouse_id, sku_id)
@@ -201,8 +199,6 @@ def create_sku(
     Returns:
         SKU: Созданная номенклатура
     """
-    from app.database.models import SKU
-    
     # Проверка на дубликат кода
     existing = db.execute(
         select(SKU).where(SKU.code == code)
@@ -232,8 +228,6 @@ def create_sku(
 
 def get_all_skus(db: Session) -> List['SKU']:
     """Получить всю номенклатуру."""
-    from app.database.models import SKU
-    
     skus = db.execute(select(SKU)).scalars().all()
     logger.debug(f"Найдено {len(skus)} номенклатур")
     return list(skus)
@@ -255,8 +249,6 @@ def get_all_stock_by_warehouse(
     Returns:
         List[Stock]: Список остатков
     """
-    from app.database.models import SKU
-    
     query = select(Stock).where(Stock.warehouse_id == warehouse_id)
     
     # Если нужна фильтрация по типу
@@ -270,8 +262,6 @@ def get_all_stock_by_warehouse(
 
 def get_sku(db: Session, sku_id: int) -> Optional['SKU']:
     """Получить номенклатуру по ID."""
-    from app.database.models import SKU
-    
     return db.execute(
         select(SKU).where(SKU.id == sku_id)
     ).scalar_one_or_none()
@@ -291,8 +281,6 @@ def get_skus_by_type(
     Returns:
         List[SKU]: Список номенклатур
     """
-    from app.database.models import SKU
-    
     skus = db.execute(
         select(SKU).where(SKU.type == type)
     ).scalars().all()
@@ -317,8 +305,6 @@ def get_stock_by_warehouse_and_type(
     Returns:
         List[Stock]: Список остатков
     """
-    from app.database.models import SKU
-    
     stocks = db.execute(
         select(Stock).join(SKU).where(
             and_(
@@ -407,25 +393,3 @@ def receive_materials(
     )
     
     return stock
-
-# ===================================================================
-# ВАЖНО: Перед добавлением убедитесь что в начале файла есть импорт:
-# from typing import List, Optional, Dict
-# 
-# Если его нет, добавьте Dict в существующий импорт из typing
-# ===================================================================
-
-# ДОБАВИТЬ В КОНЕЦ ФАЙЛА app/services/stock_service.py
-# ===================================================================
-
-# ============================================================================
-# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ HANDLERS (NEW!)
-# ============================================================================
-
-def calculate_stock_availability(
-    db: Session,
-    warehouse_id: int,
-    sku_id: int
-) -> Dict:
-    ...
-
