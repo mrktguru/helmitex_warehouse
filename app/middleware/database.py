@@ -26,7 +26,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.connection import SessionLocal
+from app.database.connection import SessionLocal, get_session_maker
 from app.config import settings
 
 
