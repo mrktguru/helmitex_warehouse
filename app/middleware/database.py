@@ -26,7 +26,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.connection import SessionLocal, get_session_maker
+from app.database import connection as db_connection
 from app.config import settings
 
 
@@ -73,7 +73,7 @@ class DatabaseMiddleware(BaseMiddleware):
             Any: Результат выполнения handler
         """
         # Проверяем, что SessionLocal инициализирован
-        if SessionLocal is None:
+        if db_connection.SessionLocal is None:
             logger.error("❌ SessionLocal не инициализирован! Вызовите init_db() при старте.")
             await self._send_error_message(
                 event,
@@ -86,7 +86,7 @@ class DatabaseMiddleware(BaseMiddleware):
         event_type = self._get_event_type(event)
         
         # Создаем сессию БД
-        async with session_maker() as session:
+        async with db_connection.SessionLocal() as session:
             # Добавляем сессию в data для передачи в handler
             data["session"] = session
             
@@ -314,12 +314,11 @@ class DatabaseSessionMiddleware(BaseMiddleware):
         Returns:
             Any: Результат выполнения handler
         """
-            session_maker = SessionLocal or get_session_maker()
-            if session_maker is None:
-                logger.error("❌ SessionLocal не инициализирован!")
-                return
+        if db_connection.SessionLocal is None:
+            logger.error("❌ SessionLocal не инициализирован!")
+            return
         
-        async with session_maker() as session:
+        async with db_connection.SessionLocal() as session:
             data["session"] = session
             
             try:
