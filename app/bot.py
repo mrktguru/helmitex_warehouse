@@ -370,17 +370,17 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 def register_handlers(dp) -> None:
     """
-    ИСПРАВЛЕННАЯ функция регистрации handlers с правильными импортами
+    ИСПРАВЛЕННАЯ функция регистрации handlers с правильными импортами.
+    
+    ВАЖНО: Порядок регистрации имеет значение!
+    - Специфичные роутеры регистрируются ПЕРВЫМИ
+    - Main router (с catch-all handlers) регистрируется ПОСЛЕДНИМ
     """
     logger.info("=" * 60)
     logger.info("🔧 РЕГИСТРАЦИЯ HANDLERS")
     logger.info("=" * 60)
     
-    # 1. Главный роутер (команды /start, /help)
-    dp.include_router(main_router)
-    logger.info("✅ Main router registered")
-    
-    # 2. Административные панели (проверяют права)
+    # 1. Административные панели (проверяют права)
     try:
         from app.handlers.admin_users import admin_users_router
         dp.include_router(admin_users_router)
@@ -446,6 +446,10 @@ def register_handlers(dp) -> None:
         logger.info("✅ Main handlers router registered")
     except ImportError as e:
         logger.debug(f"ℹ️ Main handlers router not found: {e}")
+    
+    # 6. Main router ПОСЛЕДНИМ (содержит catch-all handler для неизвестных команд)
+    dp.include_router(main_router)
+    logger.info("✅ Main router registered (last - catch-all)")
     
     logger.info("=" * 60)
     logger.info("✅ HANDLER REGISTRATION COMPLETED")
