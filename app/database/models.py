@@ -20,7 +20,7 @@
 - WasteRecord: учет отходов
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Float, Boolean, Text, Index
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Enum, ForeignKey, Float, Boolean, Text, Index
 from sqlalchemy.orm import relationship
 import enum
 
@@ -124,7 +124,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)  # BigInteger для больших Telegram ID
     username = Column(String(255), nullable=True)
     full_name = Column(String(255), nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False)
