@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from typing import List, Optional
-from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard
+from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard, Recipient
 
 
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -95,6 +95,88 @@ def get_sku_keyboard(skus: List[SKU], prefix: str = "sku") -> InlineKeyboardMark
     return builder.as_markup()
 
 
+def get_recipes_keyboard(
+    recipes: List[TechnologicalCard],
+    callback_prefix: str = "recipe",
+    show_details: bool = False
+) -> InlineKeyboardMarkup:
+    """
+    Создает inline-клавиатуру со списком технологических карт (рецептов).
+    
+    Args:
+        recipes: Список объектов TechnologicalCard
+        callback_prefix: Префикс для callback_data
+        show_details: Показывать ли детали (выход продукта)
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с рецептами
+    """
+    builder = InlineKeyboardBuilder()
+    
+    for recipe in recipes:
+        # Формируем текст кнопки
+        button_text = f"📋 {recipe.name}"
+        
+        # Добавляем детали, если требуется
+        if show_details:
+            button_text += f" (выход: {recipe.yield_percent}%)"
+        
+        builder.row(
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"{callback_prefix}_{recipe.id}"
+            )
+        )
+    
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")
+    )
+    
+    return builder.as_markup()
+
+
+def get_recipients_keyboard(
+    recipients: List[Recipient],
+    callback_prefix: str = "recipient",
+    show_contact: bool = False
+) -> InlineKeyboardMarkup:
+    """
+    Создает inline-клавиатуру со списком получателей.
+    
+    Args:
+        recipients: Список объектов Recipient
+        callback_prefix: Префикс для callback_data
+        show_contact: Показывать ли контактную информацию
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с получателями
+    """
+    builder = InlineKeyboardBuilder()
+    
+    for recipient in recipients:
+        # Формируем текст кнопки
+        button_text = f"👤 {recipient.name}"
+        
+        # Добавляем контактную информацию, если требуется и она есть
+        if show_contact and recipient.contact_info:
+            # Обрезаем длинную контактную информацию для кнопки
+            contact_short = recipient.contact_info[:20] + "..." if len(recipient.contact_info) > 20 else recipient.contact_info
+            button_text += f" ({contact_short})"
+        
+        builder.row(
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"{callback_prefix}_{recipient.id}"
+            )
+        )
+    
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")
+    )
+    
+    return builder.as_markup()
+
+
 def get_confirmation_keyboard(action: str, item_id: int) -> InlineKeyboardMarkup:
     """
     Создает клавиатуру подтверждения действия.
@@ -121,31 +203,6 @@ def get_confirmation_keyboard(action: str, item_id: int) -> InlineKeyboardMarkup
     
     return builder.as_markup()
 
-def get_recipes_keyboard(
-    recipes: List[TechnologicalCard],
-    callback_prefix: str = "recipe",
-    show_details: bool = False
-) -> InlineKeyboardMarkup:
-    """Creates inline keyboard with list of recipes"""
-    builder = InlineKeyboardBuilder()
-    
-    for recipe in recipes:
-        button_text = f"📋 {recipe.name}"
-        if show_details:
-            button_text += f" (выход: {recipe.yield_percent}%)"
-        
-        builder.row(
-            InlineKeyboardButton(
-                text=button_text,
-                callback_data=f"{callback_prefix}_{recipe.id}"
-            )
-        )
-    
-    builder.row(
-        InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")
-    )
-    
-    return builder.as_markup()
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """
