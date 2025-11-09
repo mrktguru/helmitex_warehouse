@@ -111,7 +111,7 @@ async def create_bot() -> Bot:
     
     # Создаем бота с настройками по умолчанию
     bot = Bot(
-        token=settings.BOT_TOKEN,
+        token=settings.TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(
             parse_mode=ParseMode.HTML,  # HTML разметка по умолчанию
         ),
