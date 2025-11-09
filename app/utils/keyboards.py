@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from typing import List, Optional
-from app.database.models import Warehouse, SKU, Barrel, PackingVariant
+from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard
 
 
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -121,6 +121,31 @@ def get_confirmation_keyboard(action: str, item_id: int) -> InlineKeyboardMarkup
     
     return builder.as_markup()
 
+def get_recipes_keyboard(
+    recipes: List[TechnologicalCard],
+    callback_prefix: str = "recipe",
+    show_details: bool = False
+) -> InlineKeyboardMarkup:
+    """Creates inline keyboard with list of recipes"""
+    builder = InlineKeyboardBuilder()
+    
+    for recipe in recipes:
+        button_text = f"📋 {recipe.name}"
+        if show_details:
+            button_text += f" (выход: {recipe.yield_percent}%)"
+        
+        builder.row(
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"{callback_prefix}_{recipe.id}"
+            )
+        )
+    
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")
+    )
+    
+    return builder.as_markup()
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """
