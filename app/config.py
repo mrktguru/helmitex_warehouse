@@ -335,8 +335,7 @@ class Settings(BaseSettings):
         try:
             import pytz
             pytz.timezone(v)
-        except (ImportError, pytz.exceptions.UnknownTimeZoneError) as e:
-            logger.warning(f"Проблема с timezone {v}: {e}")
+        except Exception:
             # Если pytz не установлен или зона неверна, используем UTC
             return "UTC"
         return v
