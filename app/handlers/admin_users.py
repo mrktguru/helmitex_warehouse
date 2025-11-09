@@ -694,20 +694,18 @@ async def view_user_statistics(query: CallbackQuery, state: FSMContext, session:
             return
         
         # Подсчет операций
-        # Движения
         movements_count = await session.scalar(
-            select(func.count(Movement.id)).where(Movement.performed_by_id == user_id)
+            select(func.count(Movement.id)).where(Movement.user_id == user_id)
         )
         
-        # Производственные партии
         production_count = await session.scalar(
-            select(func.count(ProductionBatch.id)).where(ProductionBatch.created_by_id == user_id)
+            select(func.count(ProductionBatch.id)).where(ProductionBatch.user_id == user_id)
         )
         
-        # Отгрузки
         shipments_count = await session.scalar(
-            select(func.count(Shipment.id)).where(Shipment.created_by_id == user_id)
+            select(func.count(Shipment.id)).where(Shipment.user_id == user_id)
         )
+
         
         # Период активности
         if user.last_active and user.created_at:
