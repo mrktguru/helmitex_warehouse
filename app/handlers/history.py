@@ -1036,6 +1036,7 @@ async def cancel_history(event: Union[Message, CallbackQuery], state: FSMContext
 
 
 
-__all__ = ['history_router']
-router = Router(name='history')
+# Export router with expected name
 history_router = router
+
+__all__ = ['history_router']
