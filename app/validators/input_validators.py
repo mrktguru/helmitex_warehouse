@@ -667,3 +667,190 @@ def is_valid_name(text: str) -> bool:
     """Быстрая проверка валидности названия."""
     is_valid, _, _ = validate_name(text)
     return is_valid
+
+def validate_positive_decimal(input_text: str, min_value: float = 0.01, max_value: float = 999999.0, max_decimals: int = 3):
+    """Валидация положительного десятичного числа."""
+    from typing import Tuple, Optional
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    is_valid, number = parse_float(input_text)
+    if not is_valid:
+        return False, None, "❌ Некорректный формат числа"
+    if number <= 0:
+        return False, None, "❌ Значение должно быть положительным"
+    if number < min_value:
+        return False, None, f"❌ Значение должно быть не менее {min_value}"
+    if number > max_value:
+        return False, None, f"❌ Значение не должно превышать {max_value}"
+    decimal_places = count_decimal_places(number)
+    if decimal_places > max_decimals:
+        return False, None, f"❌ Максимум {max_decimals} знака после запятой"
+    return True, number, ""
+
+def validate_positive_integer(input_text: str, min_value: int = 1, max_value: int = 999999):
+    """Валидация положительного целого числа."""
+    from typing import Tuple, Optional
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    text = input_text.strip()
+    if not text.isdigit():
+        return False, None, "❌ Введите целое число"
+    try:
+        number = int(text)
+    except ValueError:
+        return False, None, "❌ Некорректный формат"
+    if number <= 0:
+        return False, None, "❌ Число должно быть положительным"
+    if number < min_value or number > max_value:
+        return False, None, f"❌ Число должно быть от {min_value} до {max_value}"
+    return True, number, ""
+
+def is_valid_positive_decimal(text: str):
+    """Быстрая проверка."""
+    is_valid, _, _ = validate_positive_decimal(text)
+    return is_valid
+
+def is_valid_positive_integer(text: str):
+    """Быстрая проверка."""
+    is_valid, _, _ = validate_positive_integer(text)
+    return is_valid
+
+# ============================================================================
+# НЕДОСТАЮЩИЕ ФУНКЦИИ (ПАТЧ)
+# ============================================================================
+
+def validate_positive_decimal(input_text: str, min_value: float = 0.01, max_value: float = 999999.0, max_decimals: int = 3):
+    """Валидация положительного десятичного числа."""
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    is_valid, number = parse_float(input_text)
+    if not is_valid:
+        return False, None, "❌ Некорректный формат числа"
+    if number <= 0:
+        return False, None, "❌ Значение должно быть положительным"
+    if number < min_value:
+        return False, None, f"❌ Значение должно быть не менее {min_value}"
+    if number > max_value:
+        return False, None, f"❌ Значение не должно превышать {max_value}"
+    decimal_places = count_decimal_places(number)
+    if decimal_places > max_decimals:
+        return False, None, f"❌ Максимум {max_decimals} знака после запятой"
+    return True, number, ""
+
+def validate_positive_integer(input_text: str, min_value: int = 1, max_value: int = 999999):
+    """Валидация положительного целого числа."""
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    text = input_text.strip()
+    if not text.isdigit():
+        return False, None, "❌ Введите целое число"
+    try:
+        number = int(text)
+    except ValueError:
+        return False, None, "❌ Некорректный формат"
+    if number <= 0:
+        return False, None, "❌ Число должно быть положительным"
+    if number < min_value or number > max_value:
+        return False, None, f"❌ Число должно быть от {min_value} до {max_value}"
+    return True, number, ""
+
+def validate_text_length(input_text: str, min_length: int = 1, max_length: int = 1000, field_name: str = "Текст"):
+    """Валидация длины текста."""
+    if not input_text:
+        if min_length > 0:
+            return False, None, f"❌ {field_name}: обязательное поле"
+        return True, "", ""
+    text = input_text.strip()
+    text_len = len(text)
+    if text_len < min_length:
+        return False, None, f"❌ {field_name}: минимум {min_length} символов"
+    if text_len > max_length:
+        return False, None, f"❌ {field_name}: максимум {max_length} символов"
+    return True, text, ""
+
+def is_valid_positive_decimal(text: str):
+    """Быстрая проверка."""
+    is_valid, _, _ = validate_positive_decimal(text)
+    return is_valid
+
+def is_valid_positive_integer(text: str):
+    """Быстрая проверка."""
+    is_valid, _, _ = validate_positive_integer(text)
+    return is_valid
+
+def is_valid_text_length(text: str, min_length: int = 1, max_length: int = 1000):
+    """Быстрая проверка."""
+    is_valid, _, _ = validate_text_length(text, min_length, max_length)
+    return is_valid
+
+def parse_decimal_input(input_text: str):
+    """
+    Парсинг десятичного ввода (алиас для parse_float с возвратом в другом формате).
+    
+    Args:
+        input_text: Введенный текст
+        
+    Returns:
+        Tuple[bool, Optional[float], str]: (успех, значение, ошибка)
+    """
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    
+    is_valid, number = parse_float(input_text)
+    
+    if not is_valid:
+        return False, None, "❌ Некорректный формат числа. Используйте цифры, точку или запятую."
+    
+    return True, number, ""
+
+def parse_integer_input(input_text: str):
+    """
+    Парсинг целочисленного ввода.
+    
+    Args:
+        input_text: Введенный текст
+        
+    Returns:
+        Tuple[bool, Optional[int], str]: (успех, значение, ошибка)
+    """
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите число"
+    
+    is_valid, number = parse_integer(input_text)
+    
+    if not is_valid:
+        return False, None, "❌ Некорректный формат числа. Введите целое число."
+    
+    return True, number, ""
+
+def validate_sku_code(input_text: str, min_length: int = 2, max_length: int = 50):
+    """Валидация кода SKU (алиас для validate_code)."""
+    return validate_code(input_text, min_length, max_length, allow_spaces=False)
+
+def validate_sku_name(input_text: str, min_length: int = 2, max_length: int = 200):
+    """Валидация названия SKU (алиас для validate_name)."""
+    return validate_name(input_text, min_length, max_length, allow_special_chars=True)
+
+def validate_warehouse_name(input_text: str, min_length: int = 2, max_length: int = 200):
+    """Валидация названия склада (алиас для validate_name)."""
+    return validate_name(input_text, min_length, max_length, allow_special_chars=True)
+
+def validate_category_name(input_text: str, min_length: int = 2, max_length: int = 100):
+    """Валидация названия категории (алиас для validate_name)."""
+    return validate_name(input_text, min_length, max_length, allow_special_chars=False)
+
+def validate_recipe_name(input_text: str, min_length: int = 3, max_length: int = 200):
+    """Валидация названия рецепта (алиас для validate_name)."""
+    return validate_name(input_text, min_length, max_length, allow_special_chars=True)
+
+def validate_recipient_name(input_text: str, min_length: int = 2, max_length: int = 200):
+    """Валидация имени получателя (алиас для validate_name)."""
+    return validate_name(input_text, min_length, max_length, allow_special_chars=True)
+
+def validate_contact_info(input_text: str, max_length: int = 500):
+    """Валидация контактной информации (алиас для validate_notes)."""
+    return validate_notes(input_text, max_length)
+
+def validate_description(input_text: str, max_length: int = 1000):
+    """Валидация описания (алиас для validate_notes)."""
+    return validate_notes(input_text, max_length)
