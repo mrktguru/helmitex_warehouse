@@ -370,7 +370,7 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 def register_handlers(dp) -> None:
     """
-    ИСПРАВЛЕННАЯ функция регистрации handlers
+    ИСПРАВЛЕННАЯ функция регистрации handlers с правильными импортами
     """
     logger.info("=" * 60)
     logger.info("🔧 РЕГИСТРАЦИЯ HANDLERS")
@@ -382,43 +382,43 @@ def register_handlers(dp) -> None:
     
     # 2. Административные панели (проверяют права)
     try:
-        from app.handlers.admin_users import router as admin_users_router
+        from app.handlers.admin_users import admin_users_router
         dp.include_router(admin_users_router)
         logger.info("✅ Admin users router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import admin_users router: {e}")
     
     try:
-        from app.handlers.admin_warehouse import router as admin_warehouse_router
+        from app.handlers.admin_warehouse import admin_warehouse_router
         dp.include_router(admin_warehouse_router)
         logger.info("✅ Admin warehouse router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import admin_warehouse router: {e}")
     
-    # 3. ИСПРАВЛЕННЫЕ импорты основных бизнес-процессов
+    # 3. ✅ ИСПРАВЛЕННЫЕ импорты основных бизнес-процессов
     try:
-        from app.handlers.arrival import router as arrival_router  # БЫЛО arrival_router
+        from app.handlers.arrival import arrival_router
         dp.include_router(arrival_router)
         logger.info("✅ Arrival router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import arrival router: {e}")
     
     try:
-        from app.handlers.production import router as production_router  # БЫЛО production_router
+        from app.handlers.production import production_router
         dp.include_router(production_router)
         logger.info("✅ Production router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import production router: {e}")
     
     try:
-        from app.handlers.packing import router as packing_router  # БЫЛО packing_router
+        from app.handlers.packing import packing_router
         dp.include_router(packing_router)
         logger.info("✅ Packing router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import packing router: {e}")
     
     try:
-        from app.handlers.shipment import router as shipment_router  # БЫЛО shipment_router
+        from app.handlers.shipment import shipment_router
         dp.include_router(shipment_router)
         logger.info("✅ Shipment router registered")
     except ImportError as e:
@@ -426,14 +426,14 @@ def register_handlers(dp) -> None:
     
     # 4. Просмотр данных
     try:
-        from app.handlers.stock import router as stock_router  # БЫЛО stock_router
+        from app.handlers.stock import stock_router
         dp.include_router(stock_router)
         logger.info("✅ Stock router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import stock router: {e}")
     
     try:
-        from app.handlers.history import router as history_router
+        from app.handlers.history import history_router
         dp.include_router(history_router)
         logger.info("✅ History router registered")
     except ImportError as e:
