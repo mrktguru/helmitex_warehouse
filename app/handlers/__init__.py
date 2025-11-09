@@ -11,41 +11,29 @@
 Каждый handler возвращает настроенный ConversationHandler для регистрации в Application.
 """
 
-# Импорт handlers операционных процессов
-from .arrival import get_arrival_handler
-from .production import get_production_handler
-from .packing import get_packing_handler
-from .shipment import get_shipment_handler
-
-# Импорт handlers просмотра и аналитики
-from .stock import get_stock_handler
-from .history import get_history_handler
-
-# Импорт административных handlers
-from .admin_warehouse import get_admin_warehouse_handler
-from .admin_users import get_admin_users_handler
-
+# Import routers from handler modules
+from .arrival import arrival_router
+from .production import production_router
+from .packing import packing_router
+from .shipment import shipment_router
+from .stock import stock_router
+from .history import history_router
+from .admin_users import admin_users_router
+from .admin_warehouse import admin_warehouse_router
 
 # Список всех экспортируемых handlers
 __all__ = [
-    # Операционные handlers
-    'get_arrival_handler',
-    'get_production_handler',
-    'get_packing_handler',
-    'get_shipment_handler',
-    
-    # Информационные handlers
-    'get_stock_handler',
-    'get_history_handler',
-    
-    # Административные handlers
-    'get_admin_warehouse_handler',
-    'get_admin_users_handler',
+    'arrival_router',
+    'production_router',
+    'packing_router',
+    'shipment_router',
+    'stock_router',
+    'history_router',
+    'admin_users_router',
+    'admin_warehouse_router',
 ]
 
-
-# Версия handlers API
-__version__ = '1.0.0'
+__version__ = '2.0.0'  # aiogram 3.x version
 
 
 def get_all_handlers():
