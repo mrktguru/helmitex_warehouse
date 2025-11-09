@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from typing import List, Optional
-from app.models import Warehouse, SKU, Barrel, PackingVariant
+from app.database.models import Warehouse, SKU, Barrel, PackingVariant
 
 
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
