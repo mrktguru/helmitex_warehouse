@@ -114,8 +114,10 @@ async def users_menu(
             f"  • Активных: {active_users}\n"
             f"  • Администраторов: {admin_users}\n\n"
         )
-    except:
-        stats_text = ""
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики: {e}")
+            stats_text = ""
+
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Список пользователей", callback_data='users_list')],
