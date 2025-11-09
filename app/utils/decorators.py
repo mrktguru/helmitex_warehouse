@@ -62,7 +62,7 @@ def admin_only(func: Callable) -> Callable:
                 if message:
                     try:
                         await message.answer(error_text)
-                    except: TelegramAPIError as e:
+                    except TelegramAPIError as e:
                         logger.warning(f"Не удалось отправить сообщение: {e}")
             else:
                 await message.answer(error_text)
@@ -121,7 +121,7 @@ def owner_only(func: Callable) -> Callable:
                 if message:
                     try:
                         await message.answer(error_text)
-                    except: TelegramAPIError as e:
+                    except TelegramAPIError as e:
                         logger.warning(f"Не удалось отправить сообщение: {e}")
 
             else:
