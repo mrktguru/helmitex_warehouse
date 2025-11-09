@@ -1028,7 +1028,8 @@ async def cancel_users_admin(event: Union[Message, CallbackQuery], state: FSMCon
 
 
 
-__all__ = ['admin_users_router']
-router = Router(name='admin_users')
+# Export router with expected name
 admin_users_router = router
+
+__all__ = ['admin_users_router']
 
