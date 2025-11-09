@@ -2057,4 +2057,6 @@ async def cancel_from_any_state(query: CallbackQuery, state: FSMContext) -> None
 
 
 
-__all__ = ['router']
+__all__ = ['admin_warehouse_router']
+router = Router(name='admin_warehouse')
+admin_warehouse_router = router
