@@ -854,3 +854,119 @@ def validate_contact_info(input_text: str, max_length: int = 500):
 def validate_description(input_text: str, max_length: int = 1000):
     """Валидация описания (алиас для validate_notes)."""
     return validate_notes(input_text, max_length)
+
+# ============================================================================
+# DATE VALIDATION FUNCTIONS
+# ============================================================================
+
+def validate_date_format(
+    input_text: str,
+    date_format: str = "%d.%m.%Y"
+) -> Tuple[bool, Optional[str], str]:
+    """
+    Валидация формата даты.
+    
+    Args:
+        input_text: Введенный текст с датой
+        date_format: Ожидаемый формат даты (по умолчанию DD.MM.YYYY)
+        
+    Returns:
+        Tuple[bool, Optional[str], str]:
+            - True если формат валиден
+            - Дата в строковом формате или None
+            - Сообщение об ошибке (если есть)
+            
+    Example:
+        >>> validate_date_format("25.12.2024")
+        (True, "25.12.2024", "")
+        >>> validate_date_format("2024-12-25")
+        (False, None, "Некорректный формат даты. Используйте DD.MM.YYYY")
+        >>> validate_date_format("32.13.2024")
+        (False, None, "Некорректная дата")
+    """
+    from datetime import datetime
+    
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите дату"
+    
+    input_text = input_text.strip()
+    
+    try:
+        # Пробуем распарсить дату в указанном формате
+        parsed_date = datetime.strptime(input_text, date_format)
+        
+        # Проверяем, что дата не из далекого будущего или прошлого
+        current_year = datetime.now().year
+        if parsed_date.year < 2000 or parsed_date.year > current_year + 10:
+            return False, None, f"❌ Год должен быть между 2000 и {current_year + 10}"
+        
+        # Возвращаем дату в том же формате
+        return True, parsed_date.strftime(date_format), ""
+        
+    except ValueError as e:
+        # Определяем тип ошибки для более понятного сообщения
+        if "day is out of range" in str(e) or "month must be in" in str(e):
+            return False, None, "❌ Некорректная дата (проверьте день и месяц)"
+        elif "does not match format" in str(e):
+            format_example = date_format.replace("%d", "ДД").replace("%m", "ММ").replace("%Y", "ГГГГ")
+            return False, None, f"❌ Некорректный формат. Используйте: {format_example}"
+        else:
+            return False, None, "❌ Некорректная дата"
+    except Exception as e:
+        logger.error(f"Unexpected error in validate_date_format: {e}")
+        return False, None, "❌ Ошибка валидации даты"
+
+
+def parse_date_input(
+    input_text: str,
+    date_format: str = "%d.%m.%Y"
+) -> Tuple[bool, Optional[object], str]:
+    """
+    Парсинг и валидация даты с возвратом объекта datetime.
+    
+    Args:
+        input_text: Введенный текст с датой
+        date_format: Ожидаемый формат даты (по умолчанию DD.MM.YYYY)
+        
+    Returns:
+        Tuple[bool, Optional[datetime], str]:
+            - True если валидно
+            - Объект datetime или None
+            - Сообщение об ошибке (если есть)
+            
+    Example:
+        >>> parse_date_input("25.12.2024")
+        (True, datetime(2024, 12, 25), "")
+        >>> parse_date_input("invalid")
+        (False, None, "Некорректный формат даты")
+    """
+    from datetime import datetime
+    
+    if not input_text or not input_text.strip():
+        return False, None, "❌ Пожалуйста, введите дату"
+    
+    input_text = input_text.strip()
+    
+    try:
+        # Парсим дату
+        parsed_date = datetime.strptime(input_text, date_format)
+        
+        # Проверяем разумность года
+        current_year = datetime.now().year
+        if parsed_date.year < 2000 or parsed_date.year > current_year + 10:
+            return False, None, f"❌ Год должен быть между 2000 и {current_year + 10}"
+        
+        # Возвращаем объект datetime
+        return True, parsed_date, ""
+        
+    except ValueError as e:
+        if "day is out of range" in str(e) or "month must be in" in str(e):
+            return False, None, "❌ Некорректная дата (проверьте день и месяц)"
+        elif "does not match format" in str(e):
+            format_example = date_format.replace("%d", "ДД").replace("%m", "ММ").replace("%Y", "ГГГГ")
+            return False, None, f"❌ Некорректный формат. Используйте: {format_example}"
+        else:
+            return False, None, "❌ Некорректная дата"
+    except Exception as e:
+        logger.error(f"Unexpected error in parse_date_input: {e}")
+        return False, None, "❌ Ошибка парсинга даты"
