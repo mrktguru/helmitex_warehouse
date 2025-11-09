@@ -2057,6 +2057,7 @@ async def cancel_from_any_state(query: CallbackQuery, state: FSMContext) -> None
 
 
 
-__all__ = ['admin_warehouse_router']
-router = Router(name='admin_warehouse')
+# Export router with expected name
 admin_warehouse_router = router
+
+__all__ = ['admin_warehouse_router']
