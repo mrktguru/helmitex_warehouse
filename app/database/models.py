@@ -24,8 +24,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Floa
 from sqlalchemy.orm import relationship
 import enum
 
-from .db import Base
-
+from app.database.db import Base
 
 # ============================================================================
 # ENUM ТИПЫ
