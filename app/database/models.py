@@ -128,16 +128,24 @@ class User(Base):
     username = Column(String(255), nullable=True)
     full_name = Column(String(255), nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False)
+    
+    # ДОБАВЛЕННЫЕ ПОЛЯ для совместимости с bot.py:
+    is_active = Column(Boolean, default=True, nullable=False)
+    can_receive_materials = Column(Boolean, default=False, nullable=False)
+    can_produce = Column(Boolean, default=False, nullable=False)
+    can_pack = Column(Boolean, default=False, nullable=False)
+    can_ship = Column(Boolean, default=False, nullable=False)
+    last_active = Column(DateTime, default=datetime.utcnow, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # Relationships
+    # Relationships (без изменений)
     movements = relationship("Movement", back_populates="user")
     production_batches = relationship("ProductionBatch", back_populates="user")
     recipes_created = relationship("TechnologicalCard", back_populates="created_by_user")
 
     def __repr__(self):
         return f"<User(id={self.id}, telegram_id={self.telegram_id}, username={self.username})>"
-
 
 class Warehouse(Base):
     """
