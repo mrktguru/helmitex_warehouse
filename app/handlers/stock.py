@@ -44,7 +44,6 @@ stock_router = Router(name="stock")
 class StockStates(StatesGroup):
     """Состояния диалога просмотра остатков."""
     select_action = State()
-    select_warehouse = State()
     select_sku_type = State()
 
 
@@ -85,9 +84,10 @@ async def start_stock_view(
         return
     
     # Инициализация данных
+    from datetime import timezone
     await state.update_data(
         user_id=user.id,
-        started_at=datetime.utcnow().isoformat()
+        started_at=datetime.now(timezone.utc).isoformat()
     )
     
     # Меню выбора действия
@@ -126,89 +126,50 @@ async def view_by_warehouse(
     session: AsyncSession
 ) -> None:
     """
-    Показывает список складов для просмотра остатков.
+    Показывает меню типов номенклатуры для просмотра остатков.
     """
     await callback.answer()
-    
+
     try:
-        # Получение списка складов
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        # Получение склада по умолчанию
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await callback.message.edit_text(
-                "❌ Нет доступных складов.",
+                "❌ Склад не найден.\n"
+                "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             await state.clear()
             return
-        
-        # Клавиатура выбора склада
-        keyboard = get_warehouses_keyboard(warehouses, callback_prefix='stock_wh')
-        
-        text = (
-            "📦 <b>Остатки по складам</b>\n\n"
-            "Выберите склад:"
-        )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(StockStates.select_warehouse)
-        
-    except Exception as e:
-        logger.error(f"Error in view_by_warehouse: {e}", exc_info=True)
-        await callback.message.edit_text(
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
 
-
-@stock_router.callback_query(
-    StateFilter(StockStates.select_warehouse),
-    F.data.startswith("stock_wh_")
-)
-async def select_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Обрабатывает выбор склада и показывает меню типов номенклатуры.
-    """
-    await callback.answer()
-    
-    # Извлечение ID склада
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    try:
-        # Загрузка информации о складе
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
         # Сохранение выбора
         await state.update_data(
-            warehouse_id=warehouse_id,
+            warehouse_id=warehouse.id,
             warehouse_name=warehouse.name
         )
-        
+
         # Меню выбора типа номенклатуры
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🌾 Сырье", callback_data='stock_type_raw')],
             [InlineKeyboardButton(text="🛢 Полуфабрикаты", callback_data='stock_type_semi')],
             [InlineKeyboardButton(text="📦 Готовая продукция", callback_data='stock_type_finished')],
             [InlineKeyboardButton(text="📋 Все категории", callback_data='stock_type_all')],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_by_warehouse')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_view_start')],
             [InlineKeyboardButton(text="❌ Отменить", callback_data='stock_cancel')]
         ])
-        
+
         text = (
-            f"📦 <b>Склад:</b> {warehouse.name}\n\n"
+            "📦 <b>Остатки на складе</b>\n\n"
+            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
             "Выберите категорию номенклатуры:"
         )
-        
+
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(StockStates.select_sku_type)
-        
+
     except Exception as e:
-        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
+        logger.error(f"Error in view_by_warehouse: {e}", exc_info=True)
         await callback.message.edit_text(
             f"❌ Ошибка: {str(e)}",
             reply_markup=get_main_menu_keyboard()
