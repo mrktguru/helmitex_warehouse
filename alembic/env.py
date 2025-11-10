@@ -16,15 +16,18 @@ if config.config_file_name is not None:
 # Создаем Base напрямую без импорта
 Base = declarative_base()
 
-# Импортируем модели напрямую, игнорируя ошибки импорта
+# Импортируем модели из правильного пути
 try:
-    exec(open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models.py')).read())
+    from app.database.models import Base as ModelsBase
+    target_metadata = ModelsBase.metadata
 except Exception as e:
-    print(f"Warning: Could not load models.py: {e}")
+    print(f"Warning: Could not load models: {e}")
+    target_metadata = Base.metadata
 
-target_metadata = Base.metadata
-
+# Получаем DATABASE_URL и заменяем asyncpg на psycopg2 для Alembic
 database_url = os.getenv('DATABASE_URL', 'postgresql+psycopg2://warehouse:warehouse@db:5432/warehouse')
+# Alembic требует синхронный драйвер, заменяем asyncpg на psycopg2
+database_url = database_url.replace('postgresql+asyncpg://', 'postgresql+psycopg2://')
 config.set_main_option('sqlalchemy.url', database_url)
 
 
