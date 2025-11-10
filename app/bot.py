@@ -447,12 +447,19 @@ def register_handlers(dp) -> None:
     
     # 1. Административные панели (проверяют права)
     try:
+        from app.handlers.admin import admin_router
+        dp.include_router(admin_router)
+        logger.info("✅ Admin router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import admin router: {e}")
+
+    try:
         from app.handlers.admin_users import admin_users_router
         dp.include_router(admin_users_router)
         logger.info("✅ Admin users router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import admin_users router: {e}")
-    
+
     try:
         from app.handlers.admin_warehouse import admin_warehouse_router
         dp.include_router(admin_warehouse_router)
