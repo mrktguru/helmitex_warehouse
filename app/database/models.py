@@ -135,10 +135,10 @@ class User(Base):
     can_produce = Column(Boolean, default=False, nullable=False)
     can_pack = Column(Boolean, default=False, nullable=False)
     can_ship = Column(Boolean, default=False, nullable=False)
-    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=True)
+    last_active = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=True)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=True)
 
     # Relationships (без изменений)
     movements = relationship("Movement", back_populates="user")
@@ -159,7 +159,7 @@ class Warehouse(Base):
     name = Column(String(255), nullable=False)
     location = Column(String(500), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     stock = relationship("Stock", back_populates="warehouse", cascade="all, delete-orphan")
@@ -188,7 +188,7 @@ class SKU(Base):
     category = Column(Enum(CategoryType), nullable=True)  # Только для type='raw'
     unit = Column(Enum(UnitType), default=UnitType.kg, nullable=False)
     min_stock = Column(Float, default=0, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     stock = relationship("Stock", back_populates="sku", cascade="all, delete-orphan")
@@ -232,7 +232,7 @@ class Stock(Base):
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False, index=True)
     sku_id = Column(Integer, ForeignKey("skus.id"), nullable=False, index=True)
     quantity = Column(Float, default=0, nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="stock")
@@ -268,7 +268,7 @@ class Movement(Base):
     quantity = Column(Float, nullable=False)  # Положительное при приходе, отрицательное при расходе
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     
     # Связь с бочкой (если движение связано с конкретной бочкой)
     barrel_id = Column(Integer, ForeignKey("barrels.id"), nullable=True, index=True)
@@ -320,8 +320,8 @@ class TechnologicalCard(Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     description = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     semi_product = relationship("SKU", back_populates="recipes_output")
@@ -386,8 +386,8 @@ class ProductionBatch(Base):
     actual_weight = Column(Float, nullable=True)  # Фактический вес (кг)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     status = Column(Enum(ProductionStatus), default=ProductionStatus.planned, nullable=False, index=True)
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
     notes = Column(Text, nullable=True)
 
     # Relationships
@@ -423,7 +423,7 @@ class Barrel(Base):
     initial_weight = Column(Float, nullable=False)  # Начальный вес (кг)
     current_weight = Column(Float, nullable=False)  # Текущий вес (кг)
     
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)  # Для FIFO
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)  # Для FIFO
     is_active = Column(Boolean, default=True, nullable=False, index=True)  # Активна ли бочка
     
     # Relationships
@@ -464,7 +464,7 @@ class PackingVariant(Base):
     container_type = Column(Enum(ContainerType), nullable=False)
     weight_per_unit = Column(Float, nullable=False)  # Вес одной упаковки (кг)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     semi_product = relationship(
@@ -497,7 +497,7 @@ class Recipient(Base):
     name = Column(String(255), nullable=False)
     contact_info = Column(String(500), nullable=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     shipments = relationship("Shipment", back_populates="recipient")
@@ -519,7 +519,7 @@ class Shipment(Base):
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Relationships
     recipient = relationship("Recipient", back_populates="shipments")
@@ -569,8 +569,8 @@ class InventoryReserve(Base):
     reserved_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     reserve_type = Column(Enum(ReserveType), default=ReserveType.manual, nullable=False, index=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    expires_at = Column(DateTime, nullable=True, index=True)  # Срок резервирования
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # Срок резервирования
 
     def __repr__(self):
         return f"<InventoryReserve(id={self.id}, sku_id={self.sku_id}, quantity={self.quantity})>"
@@ -594,7 +594,7 @@ class WasteRecord(Base):
     quantity = Column(Float, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     def __repr__(self):
         return f"<WasteRecord(id={self.id}, waste_type={self.waste_type.value}, quantity={self.quantity})>"
