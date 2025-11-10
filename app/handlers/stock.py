@@ -342,103 +342,49 @@ async def view_barrels(
     session: AsyncSession
 ) -> None:
     """
-    Показывает список складов для просмотра бочек.
+    Показывает список бочек с полуфабрикатами на складе по умолчанию.
     """
-    await callback.answer()
-    
+    await callback.answer("⏳ Загрузка бочек...")
+
     try:
-        # Получение списка складов
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        # Получение склада по умолчанию
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await callback.message.edit_text(
-                "❌ Нет доступных складов.",
+                "❌ Склад не найден.\n"
+                "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             await state.clear()
             return
-        
-        # Клавиатура выбора склада
-        keyboard_buttons = []
-        for warehouse in warehouses:
-            keyboard_buttons.append([
-                InlineKeyboardButton(
-                    text=warehouse.name,
-                    callback_data=f'stock_barrels_wh_{warehouse.id}'
-                )
-            ])
-        
-        keyboard_buttons.append([
-            InlineKeyboardButton(text="🔙 Назад", callback_data='stock_start'),
-            InlineKeyboardButton(text="❌ Отменить", callback_data='stock_cancel')
-        ])
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        
-        text = (
-            "🛢 <b>Бочки с полуфабрикатами</b>\n\n"
-            "Выберите склад:"
-        )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(StockStates.select_warehouse)
-        
-    except Exception as e:
-        logger.error(f"Error in view_barrels: {e}", exc_info=True)
-        await callback.message.edit_text(
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
 
-
-@stock_router.callback_query(
-    StateFilter(StockStates.select_warehouse),
-    F.data.startswith("stock_barrels_wh_")
-)
-async def view_barrels_by_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Показывает список бочек на выбранном складе.
-    """
-    await callback.answer("⏳ Загрузка бочек...")
-    
-    # Извлечение ID склада
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    try:
-        # Загрузка информации о складе
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
         # Получение бочек
         barrels = await barrel_service.get_barrels(
             session,
-            warehouse_id=warehouse_id,
+            warehouse_id=warehouse.id,
             available_only=False
         )
-        
+
         if not barrels:
             text = (
                 f"🛢 <b>Бочки - {warehouse.name}</b>\n\n"
                 "❌ На складе нет бочек."
             )
-            
+
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_barrels')],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_view_start')],
                 [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
             ])
-            
+
             await callback.message.edit_text(text, reply_markup=keyboard)
             return
-        
+
         # Группировка по полуфабрикату
         barrels_by_sku = {}
         total_weight = Decimal('0')
         available_weight = Decimal('0')
-        
+
         for barrel in barrels:
             sku_name = barrel.semi_sku.name
             if sku_name not in barrels_by_sku:
@@ -447,16 +393,16 @@ async def view_barrels_by_warehouse(
                     'total_weight': Decimal('0'),
                     'available_weight': Decimal('0')
                 }
-            
+
             barrels_by_sku[sku_name]['barrels'].append(barrel)
             barrels_by_sku[sku_name]['total_weight'] += barrel.current_weight
-            
+
             if barrel.is_available:
                 barrels_by_sku[sku_name]['available_weight'] += barrel.current_weight
                 available_weight += barrel.current_weight
-            
+
             total_weight += barrel.current_weight
-        
+
         # Формирование отчета
         report = (
             f"🛢 <b>Бочки - {warehouse.name}</b>\n\n"
@@ -464,14 +410,14 @@ async def view_barrels_by_warehouse(
             f"⚖️ <b>Общий вес:</b> {total_weight} кг\n"
             f"✅ <b>Доступно:</b> {available_weight} кг\n\n"
         )
-        
+
         # Детали по полуфабрикатам
         for sku_name, info in sorted(barrels_by_sku.items()):
             report += f"<b>{sku_name}:</b>\n"
             report += f"  Бочек: {len(info['barrels'])}\n"
             report += f"  Общий вес: {info['total_weight']} кг\n"
             report += f"  Доступно: {info['available_weight']} кг\n"
-            
+
             # Детали первых 5 бочек
             report += "  <i>Бочки:</i>\n"
             for i, barrel in enumerate(sorted(info['barrels'], key=lambda b: b.production_date)[:5]):
@@ -481,26 +427,26 @@ async def view_barrels_by_warehouse(
                     f"{barrel.current_weight} кг "
                     f"({barrel.production_date.strftime('%d.%m.%Y')})\n"
                 )
-            
+
             if len(info['barrels']) > 5:
                 report += f"    <i>... и еще {len(info['barrels']) - 5}</i>\n"
-            
+
             report += "\n"
-        
+
         # Разбивка если слишком длинное
         if len(report) > 4000:
             report = report[:3900] + "\n\n<i>... список слишком длинный, показана часть</i>"
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f'stock_barrels_wh_{warehouse_id}')],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_barrels')],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data='stock_barrels')],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data='stock_view_start')],
             [InlineKeyboardButton(text="❌ Закрыть", callback_data='stock_cancel')]
         ])
-        
+
         await callback.message.edit_text(report, reply_markup=keyboard)
-        
+
     except Exception as e:
-        logger.error(f"Error in view_barrels_by_warehouse: {e}", exc_info=True)
+        logger.error(f"Error in view_barrels: {e}", exc_info=True)
         await callback.message.edit_text(
             f"❌ Ошибка при загрузке бочек: {str(e)}",
             reply_markup=get_main_menu_keyboard()
