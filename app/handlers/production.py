@@ -18,7 +18,7 @@ from decimal import Decimal
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User, ProductionStatus
+from app.database.models import User, ProductionStatus, ApprovalStatus
 from app.services import (
     recipe_service,
     production_service,
@@ -51,7 +51,6 @@ production_router = Router(name="production")
 
 class ProductionStates(StatesGroup):
     """Состояния диалога производства."""
-    select_warehouse = State()
     select_recipe = State()
     enter_batch_size = State()
     review_requirements = State()
@@ -96,7 +95,15 @@ async def start_production(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_produce:
         await message.answer(
@@ -104,117 +111,60 @@ async def start_production(
             "Обратитесь к администратору."
         )
         return
-    
-    # Получение списка складов
+
+    # Получение склада по умолчанию
     try:
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await message.answer(
-                "❌ Нет доступных складов.\n"
+                "❌ Склад не найден.\n"
                 "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             return
-        
-        # Сохранение начальных данных
+
+        # Получение активных рецептов
+        recipes = await recipe_service.get_recipes(session, active_only=True)
+
+        if not recipes:
+            await message.answer(
+                "❌ Нет доступных рецептов для производства.\n"
+                "Обратитесь к администратору.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+
+        # Сохранение данных
         await state.update_data(
             user_id=user.id,
+            warehouse_id=warehouse.id,
+            warehouse_name=warehouse.name,
             started_at=datetime.utcnow().isoformat()
         )
-        
-        # Клавиатура выбора склада
-        keyboard = get_warehouses_keyboard(warehouses, callback_prefix='prod_wh')
-        
+
+        # Клавиатура выбора рецепта
+        keyboard = get_recipes_keyboard(recipes, callback_prefix='prod_recipe')
+
         text = (
             "🏭 <b>Производство полуфабрикатов</b>\n\n"
-            "Выберите склад для производства:"
+            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
+            "📋 Выберите технологическую карту (рецепт):"
         )
-        
+
         if isinstance(update, CallbackQuery):
             await message.edit_text(text, reply_markup=keyboard)
         else:
             await message.answer(text, reply_markup=keyboard)
-        
-        await state.set_state(ProductionStates.select_warehouse)
-        
+
+        await state.set_state(ProductionStates.select_recipe)
+
     except Exception as e:
         logger.error(f"Error in start_production: {e}", exc_info=True)
         await message.answer(
-            f"❌ Ошибка при загрузке складов: {str(e)}",
+            f"❌ Ошибка при загрузке данных: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-
-
-# ============================================================================
-# ВЫБОР СКЛАДА
-# ============================================================================
-
-@production_router.callback_query(
-    StateFilter(ProductionStates.select_warehouse),
-    F.data.startswith("prod_wh_")
-)
-async def select_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Обрабатывает выбор склада.
-    """
-    await callback.answer()
-    
-    # Извлечение ID склада
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    try:
-        # Загрузка информации о складе
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
-        # Сохранение выбора
-        await state.update_data(
-            warehouse_id=warehouse_id,
-            warehouse_name=warehouse.name
-        )
-        
-        # Получение активных рецептов
-        recipes = await recipe_service.get_recipes(
-            session,
-            active_only=True,
-            limit=50
-        )
-        
-        if not recipes:
-            await callback.message.answer(
-                "❌ В системе нет активных технологических карт.\n"
-                "Обратитесь к администратору для создания рецептов.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            await state.clear()
-            return
-        
-        # Клавиатура выбора рецепта
-        keyboard = get_recipes_keyboard(
-            recipes,
-            callback_prefix='prod_recipe',
-            show_details=True
-        )
-        
-        text = (
-            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
-            "📋 Выберите технологическую карту (рецепт):"
-        )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(ProductionStates.select_recipe)
-        
-    except Exception as e:
-        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
-        await callback.message.answer(
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
 
 
 # ============================================================================

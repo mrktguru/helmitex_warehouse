@@ -25,10 +25,11 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import settings
-from app.database.connection import init_db, close_db, create_tables
+from app.database.connection import init_db, close_db, create_tables, get_session
 from app.middleware.database import setup_middleware
 from app.utils.logger import setup_logging, get_logger
 from app.bot import register_handlers, setup_bot_commands
+from app.services import warehouse_service
 
 # Флаг для graceful shutdown
 shutdown_event = asyncio.Event()
@@ -70,12 +71,23 @@ async def lifespan():
         # 1. Инициализация базы данных
         logger.info("📊 Инициализация базы данных...")
         await init_db()
-        
+
         # 2. Создание таблиц (только в dev режиме, если БД пустая)
         if settings.APP_ENV == "development" and settings.AUTO_CREATE_TABLES:
             logger.warning("⚠️ AUTO_CREATE_TABLES включен - создание таблиц...")
             await create_tables()
-        
+
+        # 3. Создание склада по умолчанию (если его нет)
+        logger.info("🏭 Проверка склада по умолчанию...")
+        async for session in get_session():
+            try:
+                await warehouse_service.ensure_default_warehouse(session)
+                break
+            except Exception as e:
+                logger.error(f"❌ Ошибка при создании склада по умолчанию: {e}")
+                await session.rollback()
+                raise
+
         logger.info("✅ Инициализация завершена успешно")
         logger.info("=" * 60)
         
