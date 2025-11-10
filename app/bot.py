@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.config import settings
-from app.database.models import User
+from app.database.models import User, ApprovalStatus
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -101,36 +101,101 @@ async def start_command(message: Message, session: AsyncSession) -> None:
             existing_user.username = user.username
             existing_user.last_active = datetime.now(timezone.utc)
             await session.commit()
-            
-            welcome_text = (
-                f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
-                "Выберите действие из меню ниже:"
-            )
-            keyboard = get_main_menu_keyboard(existing_user)
+
+            # Проверка статуса утверждения
+            if existing_user.approval_status == ApprovalStatus.pending:
+                welcome_text = (
+                    f"👋 Привет, <b>{user.first_name}!</b>\n\n"
+                    "⏳ <b>Ваша регистрация ожидает утверждения администратором.</b>\n\n"
+                    "После утверждения вы получите доступ к системе.\n"
+                    "Пожалуйста, ожидайте."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            elif existing_user.approval_status == ApprovalStatus.rejected:
+                welcome_text = (
+                    f"👋 Привет, <b>{user.first_name}!</b>\n\n"
+                    "❌ <b>Ваша регистрация была отклонена администратором.</b>\n\n"
+                    "Обратитесь к администратору для уточнения деталей."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            else:  # approved
+                welcome_text = (
+                    f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
+                    "Выберите действие из меню ниже:"
+                )
+                keyboard = get_main_menu_keyboard(existing_user)
         else:
             # Регистрация нового пользователя
-            new_user = User(
-                telegram_id=user.id,
-                username=user.username,
-                is_active=True,
-                # По умолчанию нет прав, админ должен назначить
-                can_receive_materials=False,
-                can_produce=False,
-                can_pack=False,
-                can_ship=False,
-                is_admin=False
-            )
-            session.add(new_user)
-            await session.commit()
-            
-            welcome_text = (
-                f"👋 Добро пожаловать в систему, <b>{user.first_name}!</b>\n\n"
-                "✅ Вы успешно зарегистрированы.\n\n"
-                "⚠️ <b>Права доступа не назначены.</b>\n"
-                "Обратитесь к администратору для получения прав.\n\n"
-                "После назначения прав вам будут доступны операции."
-            )
-            keyboard = get_main_menu_keyboard(new_user)
+            # Проверка - является ли пользователь главным админом
+            is_main_admin = (settings.ADMIN_TELEGRAM_ID and user.id == settings.ADMIN_TELEGRAM_ID)
+
+            if is_main_admin:
+                # Главный админ - автоматически утверждаем с полными правами
+                new_user = User(
+                    telegram_id=user.id,
+                    username=user.username,
+                    full_name=f"{user.first_name} {user.last_name or ''}".strip(),
+                    is_active=True,
+                    is_admin=True,
+                    approval_status=ApprovalStatus.approved,
+                    # Полные права для админа
+                    can_receive_materials=True,
+                    can_produce=True,
+                    can_pack=True,
+                    can_ship=True
+                )
+                session.add(new_user)
+                await session.commit()
+
+                welcome_text = (
+                    f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
+                    "✅ Вы зарегистрированы как <b>администратор</b>.\n\n"
+                    "У вас есть полный доступ ко всем функциям системы.\n"
+                    "Выберите действие из меню ниже:"
+                )
+                keyboard = get_main_menu_keyboard(new_user)
+            else:
+                # Обычный пользователь - требует утверждения
+                new_user = User(
+                    telegram_id=user.id,
+                    username=user.username,
+                    full_name=f"{user.first_name} {user.last_name or ''}".strip(),
+                    is_active=True,
+                    is_admin=False,
+                    approval_status=ApprovalStatus.pending,
+                    # Нет прав до утверждения
+                    can_receive_materials=False,
+                    can_produce=False,
+                    can_pack=False,
+                    can_ship=False
+                )
+                session.add(new_user)
+                await session.commit()
+
+                welcome_text = (
+                    f"👋 Добро пожаловать в систему, <b>{user.first_name}!</b>\n\n"
+                    "✅ Вы успешно зарегистрированы.\n\n"
+                    "⏳ <b>Ваша регистрация ожидает утверждения администратором.</b>\n\n"
+                    "После утверждения вы получите доступ к системе."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+
+                # Уведомление админа о новой регистрации
+                if settings.ADMIN_TELEGRAM_ID:
+                    try:
+                        bot = message.bot
+                        await bot.send_message(
+                            chat_id=settings.ADMIN_TELEGRAM_ID,
+                            text=(
+                                f"🔔 <b>Новая регистрация!</b>\n\n"
+                                f"👤 Пользователь: {user.first_name} {user.last_name or ''}\n"
+                                f"📱 Username: @{user.username or 'не указан'}\n"
+                                f"🆔 ID: <code>{user.id}</code>\n\n"
+                                f"Используйте /admin для утверждения."
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to notify admin about new registration: {e}")
         
         await message.answer(
             welcome_text,
