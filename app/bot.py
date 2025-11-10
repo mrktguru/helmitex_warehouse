@@ -38,43 +38,47 @@ main_router = Router(name="main")
 def get_main_menu_keyboard(user: User | None = None) -> InlineKeyboardMarkup:
     """
     Создает клавиатуру главного меню на основе прав пользователя.
-    
+
+    Работники видят только основные операции:
+    - Приемка, Производство, Фасовка, Отгрузка, Остатки
+
+    Админы видят дополнительно:
+    - Историю, Справку, Администрирование
+
     Args:
         user: Объект пользователя из БД
-        
+
     Returns:
         InlineKeyboardMarkup: Клавиатура с доступными кнопками
     """
     buttons = []
-    
+
     if user:
-        # Операционные кнопки
+        # Основные операции работников
         if user.can_receive_materials:
             buttons.append([InlineKeyboardButton(text="📥 Приемка сырья", callback_data='arrival_start')])
-        
+
         if user.can_produce:
             buttons.append([InlineKeyboardButton(text="🏭 Производство", callback_data='production_start')])
-        
+
         if user.can_pack:
             buttons.append([InlineKeyboardButton(text="📦 Фасовка", callback_data='packing_start')])
-        
+
         if user.can_ship:
             buttons.append([InlineKeyboardButton(text="🚚 Отгрузка", callback_data='shipment_start')])
-        
-        # Информационные кнопки (доступны всем)
-        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_start')])
-        buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
-        
-        # Административная кнопка
+
+        # Просмотр остатков (доступен всем утвержденным пользователям)
+        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_view_start')])
+
+        # Дополнительные функции только для администратора
         if user.is_admin:
+            buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
+            buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
             buttons.append([InlineKeyboardButton(text="👨‍💼 Администрирование", callback_data='admin_start')])
-        
-        # Справка
-        buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
     else:
         # Меню для незарегистрированного пользователя
         buttons.append([InlineKeyboardButton(text="📖 Справка", callback_data='help')])
-    
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
