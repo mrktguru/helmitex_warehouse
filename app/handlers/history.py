@@ -18,6 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Union
 
 from app.database.models import (
@@ -81,9 +82,10 @@ async def start_history(
         message = event
         user_id = event.from_user.id
     
-    # Получение пользователя
-    user = await session.get(User, user_id)
-    
+    # Получение пользователя по telegram_id
+    stmt = select(User).where(User.telegram_id == user_id)
+    user = await session.scalar(stmt)
+
     if not user:
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
