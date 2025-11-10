@@ -86,9 +86,11 @@ async def start_production(
         message = update
         user = update.from_user
     
-    # Получение пользователя из БД
-    db_user = await session.get(User, user.id)
-    
+    # Получение пользователя из БД по telegram_id
+    from sqlalchemy import select
+    stmt = select(User).where(User.telegram_id == user.id)
+    db_user = await session.scalar(stmt)
+
     if not db_user:
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."

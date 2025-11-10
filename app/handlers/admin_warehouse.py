@@ -18,6 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Union
 
 from app.database.models import User, SKUType, WasteType
@@ -126,9 +127,10 @@ async def start_admin(
         message = event
         user_id = event.from_user.id
     
-    # Получение пользователя
-    user = await session.get(User, user_id)
-    
+    # Получение пользователя по telegram_id
+    stmt = select(User).where(User.telegram_id == user_id)
+    user = await session.scalar(stmt)
+
     if not user:
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
@@ -525,15 +527,15 @@ async def create_sku_type_selected(query: CallbackQuery, state: FSMContext) -> N
     
     # Определение типа
     if query.data == 'sku_type_raw':
-        sku_type = SKUType.RAW
+        sku_type = SKUType.raw
         type_name = "Сырье"
         type_emoji = "🌾"
     elif query.data == 'sku_type_semi':
-        sku_type = SKUType.SEMI_FINISHED
+        sku_type = SKUType.semi
         type_name = "Полуфабрикат"
         type_emoji = "🛢"
     else:  # finished
-        sku_type = SKUType.FINISHED
+        sku_type = SKUType.finished
         type_name = "Готовая продукция"
         type_emoji = "📦"
     
@@ -781,15 +783,15 @@ async def list_sku_by_type(query: CallbackQuery, state: FSMContext, session: Asy
     
     # Определение типа
     if query.data == 'sku_list_raw':
-        sku_type = SKUType.RAW
+        sku_type = SKUType.raw
         type_name = "Сырье"
         type_emoji = "🌾"
     elif query.data == 'sku_list_semi':
-        sku_type = SKUType.SEMI_FINISHED
+        sku_type = SKUType.semi
         type_name = "Полуфабрикаты"
         type_emoji = "🛢"
     elif query.data == 'sku_list_finished':
-        sku_type = SKUType.FINISHED
+        sku_type = SKUType.finished
         type_name = "Готовая продукция"
         type_emoji = "📦"
     else:  # all
@@ -929,10 +931,10 @@ async def create_recipe_name(message: Message, state: FSMContext, session: Async
         # Получение полуфабрикатов
         semi_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.SEMI_FINISHED,
+            sku_type=SKUType.semi,
             active_only=True
         )
-        
+
         if not semi_skus:
             await message.answer(
                 "❌ Нет полуфабрикатов в системе.\n"
@@ -1155,7 +1157,7 @@ async def show_add_component_menu(message: Message, state: FSMContext, session: 
         # Получение сырья
         raw_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.RAW,
+            sku_type=SKUType.raw,
             active_only=True
         )
         
@@ -1543,9 +1545,8 @@ async def list_recipes(query: CallbackQuery, state: FSMContext, session: AsyncSe
             for recipe in recipes:
                 status = "✅ Активен" if recipe.is_active else "🔒 Неактивен"
                 text += f"🧪 <b>{recipe.name}</b> - {status}\n"
-                text += f"   🛢 Полуфабрикат: {recipe.semi_finished_sku.name}\n"
-                text += f"   📊 Выход: {recipe.output_percentage}%\n"
-                text += f"   ⚖️ Замес: {recipe.batch_size} кг\n"
+                text += f"   🛢 Полуфабрикат: {recipe.semi_product.name}\n"
+                text += f"   📊 Выход: {recipe.yield_percent}%\n"
                 text += f"   🌾 Компонентов: {len(recipe.components)}\n"
                 text += f"   🆔 ID: {recipe.id}\n\n"
             
@@ -1610,10 +1611,10 @@ async def create_variant_start(query: CallbackQuery, state: FSMContext, session:
         # Получение полуфабрикатов
         semi_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.SEMI_FINISHED,
+            sku_type=SKUType.semi,
             active_only=True
         )
-        
+
         if not semi_skus:
             await query.message.edit_text(
                 "❌ Нет полуфабрикатов в системе.\n"
@@ -1674,7 +1675,7 @@ async def create_variant_semi(query: CallbackQuery, state: FSMContext, session: 
         # Получение готовой продукции
         finished_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.FINISHED,
+            sku_type=SKUType.finished,
             active_only=True
         )
         
@@ -1895,9 +1896,9 @@ async def list_packing_variants(query: CallbackQuery, state: FSMContext, session
             
             for variant in variants:
                 status = "✅ Активен" if variant.is_active else "🔒 Неактивен"
-                text += f"📦 <b>{variant.finished_sku.name}</b> - {status}\n"
-                text += f"   🛢 Из: {variant.semi_finished_sku.name}\n"
-                text += f"   ⚖️ Вес: {variant.weight_per_unit} {variant.finished_sku.unit}\n"
+                text += f"📦 <b>{variant.finished_product.name}</b> - {status}\n"
+                text += f"   🛢 Из: {variant.semi_product.name}\n"
+                text += f"   ⚖️ Вес: {variant.weight_per_unit} {variant.finished_product.unit}\n"
                 text += f"   🆔 ID: {variant.id}\n\n"
             
             # Разбивка если слишком длинное

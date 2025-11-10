@@ -16,6 +16,7 @@ from aiogram.types import Message, CallbackQuery
 from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.database.models import SKUType, User
 from app.services import warehouse_service, stock_service
@@ -80,9 +81,10 @@ async def start_arrival(
         message = update
         user = update.from_user
     
-    # Получение пользователя из БД
-    db_user = await session.get(User, user.id)
-    
+    # Получение пользователя из БД по telegram_id
+    stmt = select(User).where(User.telegram_id == user.id)
+    db_user = await session.scalar(stmt)
+
     if not db_user:
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."

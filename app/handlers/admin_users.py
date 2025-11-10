@@ -31,6 +31,10 @@ from app.utils.keyboards import (
     get_main_menu_keyboard
 )
 from app.validators.input_validators import validate_text_length
+from app.utils.logger import get_logger
+
+# Настройка логирования
+logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -84,9 +88,10 @@ async def users_menu(
         message = event
         user_id = event.from_user.id
     
-    # Получение пользователя
-    user = await session.get(User, user_id)
-    
+    # Получение пользователя по telegram_id
+    stmt = select(User).where(User.telegram_id == user_id)
+    user = await session.scalar(stmt)
+
     if not user or not user.is_admin:
         await message.answer("❌ У вас нет административных прав.")
         await state.clear()
@@ -262,12 +267,14 @@ async def search_user_input(message: Message, state: FSMContext, session: AsyncS
         
         # Поиск по ID
         if user_input.isdigit():
-            user_id = int(user_input)
-            found_user = await session.get(User, user_id)
-            
+            search_id = int(user_input)
+
+            # Сначала поиск по внутреннему ID
+            found_user = await session.get(User, search_id)
+
             # Если не найден по ID, попробовать по telegram_id
             if not found_user:
-                stmt = select(User).where(User.telegram_id == user_id)
+                stmt = select(User).where(User.telegram_id == search_id)
                 found_user = await session.scalar(stmt)
         
         # Поиск по username

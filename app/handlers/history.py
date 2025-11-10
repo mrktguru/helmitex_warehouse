@@ -18,6 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from decimal import Decimal
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Union
 
 from app.database.models import (
@@ -81,9 +82,10 @@ async def start_history(
         message = event
         user_id = event.from_user.id
     
-    # Получение пользователя
-    user = await session.get(User, user_id)
-    
+    # Получение пользователя по telegram_id
+    stmt = select(User).where(User.telegram_id == user_id)
+    user = await session.scalar(stmt)
+
     if not user:
         await message.answer(
             "❌ Пользователь не найден. Используйте /start для регистрации."
@@ -377,7 +379,7 @@ async def view_movements(
         stmt = select(Movement).options(
             selectinload(Movement.sku),
             selectinload(Movement.warehouse),
-            selectinload(Movement.performed_by)
+            selectinload(Movement.user)
         ).order_by(Movement.created_at.desc())
         
         # Фильтры
@@ -448,10 +450,10 @@ async def view_movements(
                         f"{direction}{movement.quantity} {movement.sku.unit}\n"
                         f"    {movement.created_at.strftime('%d.%m %H:%M')}"
                     )
-                    
-                    if movement.performed_by:
-                        text += f" | {movement.performed_by.username}"
-                    
+
+                    if movement.user:
+                        text += f" | {movement.user.username}"
+
                     text += "\n"
                     
                     if movement.notes:
@@ -552,21 +554,18 @@ async def view_production(
                 text += f"<b>{icon} {status.upper()} ({len(items)}):</b>\n"
                 
                 for batch in items[:5]:  # Показываем первые 5
-                    text += f"  • <b>{batch.batch_number}</b>\n"
+                    text += f"  • <b>Партия #{batch.id}</b>\n"
                     text += f"    Рецепт: {batch.recipe.name}\n"
-                    text += f"    Размер: {batch.batch_size} кг\n"
-                    
-                    if batch.actual_output:
-                        text += f"    Выход: {batch.actual_output} кг"
-                        if batch.waste_semi_finished and batch.waste_semi_finished > 0:
-                            text += f" (брак: {batch.waste_semi_finished} кг)"
-                        text += "\n"
-                    
-                    text += f"    Дата: {batch.production_date.strftime('%d.%m.%Y')}\n"
-                    
-                    if batch.created_by:
-                        text += f"    Оператор: {batch.created_by.username}\n"
-                    
+                    text += f"    Плановый вес: {batch.target_weight} кг\n"
+
+                    if batch.actual_weight:
+                        text += f"    Фактический выход: {batch.actual_weight} кг\n"
+
+                    text += f"    Дата: {batch.started_at.strftime('%d.%m.%Y')}\n"
+
+                    if batch.user:
+                        text += f"    Оператор: {batch.user.username}\n"
+
                     text += "\n"
                 
                 if len(items) > 5:
@@ -759,23 +758,15 @@ async def view_shipments(
                 
                 for shipment in items[:5]:  # Показываем первые 5
                     text += f"  • <b>Отгрузка #{shipment.id}</b>\n"
-                    text += f"    Получатель: {shipment.recipient.name}\n"
+                    if shipment.recipient:
+                        text += f"    Получатель: {shipment.recipient.name}\n"
                     text += f"    Позиций: {len(shipment.items)}\n"
-                    
-                    # Общая сумма
-                    total_value = sum(
-                        (item.quantity * item.price_per_unit) if item.price_per_unit else 0
-                        for item in shipment.items
-                    )
-                    
-                    if total_value > 0:
-                        text += f"    Сумма: {total_value} ₽\n"
-                    
-                    text += f"    Дата: {shipment.shipment_date.strftime('%d.%m.%Y')}\n"
-                    
-                    if shipment.created_by:
-                        text += f"    Создал: {shipment.created_by.username}\n"
-                    
+                    text += f"    Дата: {shipment.created_at.strftime('%d.%m.%Y')}\n"
+
+                    if shipment.notes:
+                        notes_short = shipment.notes[:40] + "..." if len(shipment.notes) > 40 else shipment.notes
+                        text += f"    <i>{notes_short}</i>\n"
+
                     text += "\n"
                 
                 if len(items) > 5:
