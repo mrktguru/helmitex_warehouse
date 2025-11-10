@@ -133,3 +133,31 @@ async def set_default_warehouse(db: AsyncSession, warehouse_id: int) -> Optional
         logger.info(f"Set warehouse {warehouse_id} as default")
 
     return warehouse
+
+
+async def ensure_default_warehouse(db: AsyncSession) -> Warehouse:
+    """
+    Убедиться, что склад по умолчанию существует.
+    Если склада нет - создает его автоматически.
+
+    Returns:
+        Warehouse: Склад по умолчанию
+    """
+    # Проверяем наличие склада по умолчанию
+    warehouse = await get_default_warehouse(db)
+
+    if not warehouse:
+        # Создаем склад по умолчанию
+        logger.info("🏭 Склад по умолчанию не найден, создаем...")
+        warehouse = await create_warehouse(
+            db=db,
+            name="Основной склад",
+            location="Главный офис",
+            is_default=True
+        )
+        await db.commit()
+        logger.info(f"✅ Склад по умолчанию создан: {warehouse.name} (ID: {warehouse.id})")
+    else:
+        logger.info(f"✅ Склад по умолчанию найден: {warehouse.name} (ID: {warehouse.id})")
+
+    return warehouse
