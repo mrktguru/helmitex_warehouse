@@ -18,7 +18,7 @@ from decimal import Decimal
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User, ShipmentStatus, SKUType
+from app.database.models import User, ShipmentStatus, SKUType, ApprovalStatus
 from app.services import (
     shipment_service,
     warehouse_service,
@@ -104,7 +104,15 @@ async def start_shipment(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_ship:
         await message.answer(

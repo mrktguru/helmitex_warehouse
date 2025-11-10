@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database.models import SKUType, User
+from app.database.models import SKUType, User, ApprovalStatus
 from app.services import warehouse_service, stock_service
 from app.utils.keyboards import (
     get_warehouses_keyboard,
@@ -89,7 +89,15 @@ async def start_arrival(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_receive_materials:
         await message.answer(

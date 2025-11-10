@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.database.models import User, SKUType, InventoryReserve
+from app.database.models import User, SKUType, InventoryReserve, ApprovalStatus
 from app.services import (
     warehouse_service,
     stock_service,
@@ -82,7 +82,15 @@ async def start_stock_view(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Инициализация данных
     from datetime import timezone
     await state.update_data(
