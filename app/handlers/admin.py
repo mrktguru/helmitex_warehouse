@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database.models import User, ApprovalStatus
 from app.utils.logger import get_logger
@@ -142,7 +142,7 @@ async def admin_command(
 
     # Получение статистики
     pending_count = await session.scalar(
-        select(select(User).where(User.approval_status == ApprovalStatus.pending).count())
+        select(func.count(User.id)).where(User.approval_status == ApprovalStatus.pending)
     )
 
     text = (
