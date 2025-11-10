@@ -9,7 +9,7 @@
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
@@ -99,7 +99,7 @@ async def start_command(message: Message, session: AsyncSession) -> None:
         if existing_user:
             # Обновление информации
             existing_user.username = user.username
-            existing_user.last_active = datetime.utcnow()
+            existing_user.last_active = datetime.now(timezone.utc)
             await session.commit()
             
             welcome_text = (
@@ -262,7 +262,7 @@ async def show_main_menu(callback: CallbackQuery, session: AsyncSession) -> None
             keyboard = None
         else:
             # Обновление времени активности
-            db_user.last_active = datetime.utcnow()
+            db_user.last_active = datetime.now(timezone.utc)
             await session.commit()
             
             text = (

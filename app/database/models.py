@@ -136,8 +136,9 @@ class User(Base):
     can_pack = Column(Boolean, default=False, nullable=False)
     can_ship = Column(Boolean, default=False, nullable=False)
     last_active = Column(DateTime, default=datetime.utcnow, nullable=True)
-    
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
 
     # Relationships (без изменений)
     movements = relationship("Movement", back_populates="user")
@@ -316,6 +317,7 @@ class TechnologicalCard(Base):
     semi_product_id = Column(Integer, ForeignKey("skus.id"), nullable=False, index=True)
     yield_percent = Column(Float, nullable=False)  # 50-100% (процент выхода)
     status = Column(Enum(RecipeStatus), default=RecipeStatus.draft, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
     description = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -461,6 +463,7 @@ class PackingVariant(Base):
     finished_product_id = Column(Integer, ForeignKey("skus.id"), nullable=False, index=True)
     container_type = Column(Enum(ContainerType), nullable=False)
     weight_per_unit = Column(Float, nullable=False)  # Вес одной упаковки (кг)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships

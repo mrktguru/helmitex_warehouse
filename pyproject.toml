@@ -7,14 +7,18 @@ name = "helmitex-warehouse"
 version = "1.0.0"
 description = "Telegram bot for warehouse management"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "python-telegram-bot==21.5",
-    "SQLAlchemy==2.0.34",
-    "psycopg2-binary==2.9.9",
+    "aiogram==3.13.1",
+    "aiohttp==3.10.5",
+    "SQLAlchemy==2.0.35",
+    "asyncpg==0.29.0",
     "python-dotenv==1.0.1",
-    "alembic==1.13.1",
-    "pydantic==2.5.3",
+    "alembic==1.13.3",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "pytz==2024.2",
+    "python-dateutil==2.9.0",
 ]
 
 [project.optional-dependencies]

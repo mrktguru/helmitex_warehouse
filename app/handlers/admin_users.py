@@ -31,6 +31,10 @@ from app.utils.keyboards import (
     get_main_menu_keyboard
 )
 from app.validators.input_validators import validate_text_length
+from app.utils.logger import get_logger
+
+# Настройка логирования
+logger = get_logger(__name__)
 
 
 # ============================================================================
