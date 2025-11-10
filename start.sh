@@ -17,5 +17,8 @@ echo "================================="
 echo "Initializing database tables..."
 export PYTHONPATH=/app:$PYTHONPATH
 
+echo "Running database migrations..."
+cd /app && alembic upgrade head
+
 echo "Starting Telegram bot..."
 cd /app && python main.py
