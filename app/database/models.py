@@ -5,6 +5,7 @@
 Основные сущности:
 - User: пользователи системы
 - Warehouse: склады
+- Category: категории сырья (управляемый справочник)
 - SKU: номенклатура (сырье/полуфабрикаты/готовая продукция)
 - Stock: остатки товаров
 - Movement: движения товаров
@@ -38,7 +39,10 @@ class SKUType(str, enum.Enum):
 
 
 class CategoryType(str, enum.Enum):
-    """Категории сырья (только для SKUType.raw)"""
+    """
+    DEPRECATED: Старые категории сырья (для обратной совместимости).
+    Используйте таблицу Category вместо этого ENUM.
+    """
     thickeners = "Загустители"
     colorants = "Красители"
     fragrances = "Отдушки"
@@ -185,12 +189,36 @@ class Warehouse(Base):
         return f"<Warehouse(id={self.id}, name={self.name}, is_default={self.is_default})>"
 
 
+class Category(Base):
+    """
+    Категория сырья (управляемый справочник).
+
+    Заменяет жестко закодированный ENUM CategoryType.
+    Админ может создавать, редактировать и удалять категории через бот.
+    """
+    __tablename__ = "categories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)
+    code = Column(String(100), unique=True, nullable=True, index=True)  # Опционально для программного использования
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)  # Порядок отображения
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=True)
+
+    # Relationships
+    skus = relationship("SKU", back_populates="category_rel", foreign_keys="SKU.category_id")
+
+    def __repr__(self):
+        return f"<Category(id={self.id}, name={self.name})>"
+
+
 class SKU(Base):
     """
     Товарная позиция (номенклатура).
-    
+
     type:
-    - raw: сырье (требует category)
+    - raw: сырье (требует category_id)
     - semi: полуфабрикат (бочки)
     - finished: готовая продукция
     """
@@ -200,15 +228,31 @@ class SKU(Base):
     code = Column(String(100), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     type = Column(Enum(SKUType), nullable=False, index=True)
-    category = Column(Enum(CategoryType), nullable=True)  # Только для type='raw'
+
+    # НОВОЕ: Связь с таблицей Category (вместо ENUM)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, index=True)
+
+    # DEPRECATED: Старое поле для обратной совместимости (будет удалено после миграции)
+    category = Column(Enum(CategoryType), nullable=True)
+
     unit = Column(Enum(UnitType), default=UnitType.kg, nullable=False)
     min_stock = Column(Float, default=0, nullable=False)
+
+    # НОВОЕ: Дополнительные поля
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    description = Column(Text, nullable=True)  # Описание материала
+    notes = Column(Text, nullable=True)  # Примечания
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=True)
 
     # Relationships
     stock = relationship("Stock", back_populates="sku", cascade="all, delete-orphan")
     movements = relationship("Movement", back_populates="sku")
-    
+
+    # НОВОЕ: Связь с категорией
+    category_rel = relationship("Category", back_populates="skus", foreign_keys=[category_id])
+
     # Для сырья: в каких рецептах используется
     recipe_components = relationship("RecipeComponent", back_populates="raw_material")
     
