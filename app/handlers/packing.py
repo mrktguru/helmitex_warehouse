@@ -18,7 +18,7 @@ from decimal import Decimal
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User
+from app.database.models import User, ApprovalStatus
 from app.services import (
     packing_service,
     barrel_service,
@@ -53,7 +53,6 @@ packing_router = Router(name="packing")
 
 class PackingStates(StatesGroup):
     """Состояния диалога фасовки."""
-    select_warehouse = State()
     select_semi_sku = State()
     select_packing_variant = State()
     enter_units_count = State()
@@ -98,7 +97,15 @@ async def start_packing(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_pack:
         await message.answer(
@@ -106,159 +113,65 @@ async def start_packing(
             "Обратитесь к администратору."
         )
         return
-    
-    # Получение списка складов
+
+    # Получение склада по умолчанию
     try:
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await message.answer(
-                "❌ Нет доступных складов.\n"
+                "❌ Склад не найден.\n"
                 "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             return
-        
-        # Сохранение начальных данных
+
+        # Получение доступных бочек с полуфабрикатами
+        barrels = await barrel_service.get_active_barrels(session, warehouse.id)
+
+        if not barrels:
+            await message.answer(
+                "❌ Нет доступных бочек с полуфабрикатами для фасовки.\n"
+                "Сначала необходимо произвести полуфабрикаты.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+
+        # Получение уникальных полуфабрикатов из бочек
+        semi_skus = list({barrel.semi_product for barrel in barrels})
+
+        # Сохранение данных
+        from datetime import timezone
         await state.update_data(
             user_id=user.id,
-            started_at=datetime.utcnow().isoformat()
+            warehouse_id=warehouse.id,
+            warehouse_name=warehouse.name,
+            started_at=datetime.now(timezone.utc).isoformat()
         )
-        
-        # Клавиатура выбора склада
-        keyboard = get_warehouses_keyboard(warehouses, callback_prefix='pack_wh')
-        
+
+        # Клавиатура выбора полуфабриката
+        from app.utils.keyboards import get_sku_keyboard
+        keyboard = get_sku_keyboard(semi_skus, callback_prefix='pack_semi', show_stock=True)
+
         text = (
             "📦 <b>Фасовка готовой продукции</b>\n\n"
-            "Выберите склад для фасовки:"
+            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
+            "🛢 Выберите полуфабрикат из бочек:"
         )
-        
+
         if isinstance(update, CallbackQuery):
             await message.edit_text(text, reply_markup=keyboard)
         else:
             await message.answer(text, reply_markup=keyboard)
-        
-        await state.set_state(PackingStates.select_warehouse)
-        
+
+        await state.set_state(PackingStates.select_semi_sku)
+
     except Exception as e:
         logger.error(f"Error in start_packing: {e}", exc_info=True)
         await message.answer(
-            f"❌ Ошибка при загрузке складов: {str(e)}",
+            f"❌ Ошибка при загрузке данных: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-
-
-# ============================================================================
-# ВЫБОР СКЛАДА
-# ============================================================================
-
-@packing_router.callback_query(
-    StateFilter(PackingStates.select_warehouse),
-    F.data.startswith("pack_wh_")
-)
-async def select_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Обрабатывает выбор склада и показывает доступные бочки.
-    """
-    await callback.answer()
-    
-    # Извлечение ID склада
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    try:
-        # Загрузка информации о складе
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
-        # Сохранение выбора
-        await state.update_data(
-            warehouse_id=warehouse_id,
-            warehouse_name=warehouse.name
-        )
-        
-        # Получение бочек с полуфабрикатом
-        barrels = await barrel_service.get_barrels_for_packing(
-            session,
-            warehouse_id=warehouse_id
-        )
-        
-        if not barrels:
-            await callback.message.answer(
-                "❌ На складе нет бочек с полуфабрикатом для фасовки.\n"
-                "Сначала необходимо выполнить производство.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            await state.clear()
-            return
-        
-        # Группировка бочек по SKU
-        sku_map = {}
-        for barrel in barrels:
-            sku_id = barrel.semi_sku_id
-            sku_name = barrel.semi_sku.name
-            
-            if sku_id not in sku_map:
-                sku_map[sku_id] = {
-                    'name': sku_name,
-                    'unit': barrel.semi_sku.unit,
-                    'total_weight': Decimal('0'),
-                    'barrel_count': 0
-                }
-            
-            sku_map[sku_id]['total_weight'] += barrel.current_weight
-            sku_map[sku_id]['barrel_count'] += 1
-        
-        # Сохранение информации (конвертируем Decimal в строки)
-        sku_map_serializable = {}
-        for sku_id, info in sku_map.items():
-            sku_map_serializable[str(sku_id)] = {
-                'name': info['name'],
-                'unit': info['unit'],
-                'total_weight': str(info['total_weight']),
-                'barrel_count': info['barrel_count']
-            }
-        
-        await state.update_data(available_skus=sku_map_serializable)
-        
-        # Создание клавиатуры выбора полуфабриката
-        keyboard_buttons = []
-        for sku_id, info in sku_map.items():
-            button_text = (
-                f"{info['name']} "
-                f"({info['total_weight']} {info['unit']}, "
-                f"{info['barrel_count']} бочек)"
-            )
-            keyboard_buttons.append([
-                InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=f'pack_sku_{sku_id}'
-                )
-            ])
-        
-        keyboard_buttons.append([
-            InlineKeyboardButton(text="❌ Отменить", callback_data='pack_cancel')
-        ])
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        
-        text = (
-            f"📦 <b>Склад:</b> {warehouse.name}\n\n"
-            "📋 Выберите полуфабрикат для фасовки:"
-        )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(PackingStates.select_semi_sku)
-        
-    except Exception as e:
-        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
-        await callback.message.answer(
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
 
 
 # ============================================================================

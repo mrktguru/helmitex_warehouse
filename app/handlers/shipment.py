@@ -18,7 +18,7 @@ from decimal import Decimal
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User, ShipmentStatus, SKUType
+from app.database.models import User, ShipmentStatus, SKUType, ApprovalStatus
 from app.services import (
     shipment_service,
     warehouse_service,
@@ -55,7 +55,6 @@ class ShipmentStates(StatesGroup):
     """Состояния диалога отгрузки."""
     select_action = State()
     # Создание отгрузки
-    select_warehouse = State()
     select_recipient = State()
     enter_shipment_date = State()
     enter_initial_notes = State()
@@ -105,7 +104,15 @@ async def start_shipment(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_ship:
         await message.answer(
@@ -115,9 +122,10 @@ async def start_shipment(
         return
     
     # Инициализация данных
+    from datetime import timezone
     await state.update_data(
         user_id=user.id,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
         items=[]  # Список позиций отгрузки
     )
     
@@ -158,31 +166,58 @@ async def select_action_create(
     Начинает создание новой отгрузки.
     """
     await callback.answer()
-    
+
     try:
-        # Получение списка складов
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        # Получение склада по умолчанию
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await callback.message.answer(
-                "❌ Нет доступных складов.\n"
+                "❌ Склад не найден.\n"
                 "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             await state.clear()
             return
-        
-        # Клавиатура выбора склада
-        keyboard = get_warehouses_keyboard(warehouses, callback_prefix='ship_wh')
-        
+
+        # Сохранение склада
+        await state.update_data(
+            warehouse_id=warehouse.id,
+            warehouse_name=warehouse.name
+        )
+
+        # Получение списка получателей
+        recipients = await shipment_service.get_recipients(
+            session,
+            active_only=True,
+            limit=50
+        )
+
+        if not recipients:
+            await callback.message.answer(
+                "❌ В системе нет получателей.\n"
+                "Обратитесь к администратору для добавления контрагентов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            await state.clear()
+            return
+
+        # Клавиатура выбора получателя
+        keyboard = get_recipients_keyboard(
+            recipients,
+            callback_prefix='ship_rec',
+            show_contact=True
+        )
+
         text = (
             "🚚 <b>Создание отгрузки</b>\n\n"
-            "Выберите склад отгрузки:"
+            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
+            "👤 Выберите получателя (контрагента):"
         )
-        
+
         await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(ShipmentStates.select_warehouse)
-        
+        await state.set_state(ShipmentStates.select_recipient)
+
     except Exception as e:
         logger.error(f"Error in select_action_create: {e}", exc_info=True)
         await callback.message.answer(
@@ -192,75 +227,6 @@ async def select_action_create(
         await state.clear()
 
 
-# ============================================================================
-# ВЫБОР СКЛАДА
-# ============================================================================
-
-@shipment_router.callback_query(
-    StateFilter(ShipmentStates.select_warehouse),
-    F.data.startswith("ship_wh_")
-)
-async def select_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Обрабатывает выбор склада.
-    """
-    await callback.answer()
-    
-    # Извлечение ID склада
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    try:
-        # Загрузка информации о складе
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
-        # Сохранение выбора
-        await state.update_data(
-            warehouse_id=warehouse_id,
-            warehouse_name=warehouse.name
-        )
-        
-        # Получение списка получателей
-        recipients = await shipment_service.get_recipients(
-            session,
-            active_only=True,
-            limit=50
-        )
-        
-        if not recipients:
-            await callback.message.answer(
-                "❌ В системе нет получателей.\n"
-                "Обратитесь к администратору для добавления контрагентов.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            await state.clear()
-            return
-        
-        # Клавиатура выбора получателя
-        keyboard = get_recipients_keyboard(
-            recipients,
-            callback_prefix='ship_rec',
-            show_contact=True
-        )
-        
-        text = (
-            f"🚚 <b>Склад:</b> {warehouse.name}\n\n"
-            "👤 Выберите получателя (контрагента):"
-        )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(ShipmentStates.select_recipient)
-        
-    except Exception as e:
-        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
-        await callback.message.answer(
-            f"❌ Ошибка: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
 # ============================================================================
 # ВЫБОР ПОЛУЧАТЕЛЯ
 # ============================================================================
@@ -467,7 +433,7 @@ async def show_add_item_menu(
         # Получение готовой продукции со склада
         finished_skus = await stock_service.get_skus_by_type(
             session,
-            type=SKUType.FINISHED,
+            type=SKUType.finished,
             active_only=True
         )
         

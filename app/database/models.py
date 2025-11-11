@@ -116,6 +116,13 @@ class ContainerType(str, enum.Enum):
     other = "other"  # Другое
 
 
+class ApprovalStatus(str, enum.Enum):
+    """Статус утверждения пользователя"""
+    pending = "pending"  # Ожидает утверждения
+    approved = "approved"  # Утвержден
+    rejected = "rejected"  # Отклонен
+
+
 # ============================================================================
 # ОСНОВНЫЕ ТАБЛИЦЫ
 # ============================================================================
@@ -124,6 +131,11 @@ class User(Base):
     """
     Пользователь системы.
     Авторизация через Telegram ID.
+
+    approval_status:
+    - pending: новый пользователь, ожидает утверждения админом
+    - approved: утвержден, имеет доступ к системе
+    - rejected: отклонен админом
     """
     __tablename__ = "users"
 
@@ -132,7 +144,10 @@ class User(Base):
     username = Column(String(255), nullable=True)
     full_name = Column(String(255), nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False)
-    
+
+    # Статус утверждения пользователя
+    approval_status = Column(Enum(ApprovalStatus), default=ApprovalStatus.pending, nullable=False, index=True)
+
     # ДОБАВЛЕННЫЕ ПОЛЯ для совместимости с bot.py:
     is_active = Column(Boolean, default=True, nullable=False)
     can_receive_materials = Column(Boolean, default=False, nullable=False)

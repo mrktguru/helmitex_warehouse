@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.config import settings
-from app.database.models import User
+from app.database.models import User, ApprovalStatus
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -38,43 +38,47 @@ main_router = Router(name="main")
 def get_main_menu_keyboard(user: User | None = None) -> InlineKeyboardMarkup:
     """
     Создает клавиатуру главного меню на основе прав пользователя.
-    
+
+    Работники видят только основные операции:
+    - Приемка, Производство, Фасовка, Отгрузка, Остатки
+
+    Админы видят дополнительно:
+    - Историю, Справку, Администрирование
+
     Args:
         user: Объект пользователя из БД
-        
+
     Returns:
         InlineKeyboardMarkup: Клавиатура с доступными кнопками
     """
     buttons = []
-    
+
     if user:
-        # Операционные кнопки
+        # Основные операции работников
         if user.can_receive_materials:
             buttons.append([InlineKeyboardButton(text="📥 Приемка сырья", callback_data='arrival_start')])
-        
+
         if user.can_produce:
             buttons.append([InlineKeyboardButton(text="🏭 Производство", callback_data='production_start')])
-        
+
         if user.can_pack:
             buttons.append([InlineKeyboardButton(text="📦 Фасовка", callback_data='packing_start')])
-        
+
         if user.can_ship:
             buttons.append([InlineKeyboardButton(text="🚚 Отгрузка", callback_data='shipment_start')])
-        
-        # Информационные кнопки (доступны всем)
-        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_start')])
-        buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
-        
-        # Административная кнопка
+
+        # Просмотр остатков (доступен всем утвержденным пользователям)
+        buttons.append([InlineKeyboardButton(text="📊 Остатки", callback_data='stock_view_start')])
+
+        # Дополнительные функции только для администратора
         if user.is_admin:
+            buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
+            buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
             buttons.append([InlineKeyboardButton(text="👨‍💼 Администрирование", callback_data='admin_start')])
-        
-        # Справка
-        buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
     else:
         # Меню для незарегистрированного пользователя
         buttons.append([InlineKeyboardButton(text="📖 Справка", callback_data='help')])
-    
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -101,36 +105,101 @@ async def start_command(message: Message, session: AsyncSession) -> None:
             existing_user.username = user.username
             existing_user.last_active = datetime.now(timezone.utc)
             await session.commit()
-            
-            welcome_text = (
-                f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
-                "Выберите действие из меню ниже:"
-            )
-            keyboard = get_main_menu_keyboard(existing_user)
+
+            # Проверка статуса утверждения
+            if existing_user.approval_status == ApprovalStatus.pending:
+                welcome_text = (
+                    f"👋 Привет, <b>{user.first_name}!</b>\n\n"
+                    "⏳ <b>Ваша регистрация ожидает утверждения администратором.</b>\n\n"
+                    "После утверждения вы получите доступ к системе.\n"
+                    "Пожалуйста, ожидайте."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            elif existing_user.approval_status == ApprovalStatus.rejected:
+                welcome_text = (
+                    f"👋 Привет, <b>{user.first_name}!</b>\n\n"
+                    "❌ <b>Ваша регистрация была отклонена администратором.</b>\n\n"
+                    "Обратитесь к администратору для уточнения деталей."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            else:  # approved
+                welcome_text = (
+                    f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
+                    "Выберите действие из меню ниже:"
+                )
+                keyboard = get_main_menu_keyboard(existing_user)
         else:
             # Регистрация нового пользователя
-            new_user = User(
-                telegram_id=user.id,
-                username=user.username,
-                is_active=True,
-                # По умолчанию нет прав, админ должен назначить
-                can_receive_materials=False,
-                can_produce=False,
-                can_pack=False,
-                can_ship=False,
-                is_admin=False
-            )
-            session.add(new_user)
-            await session.commit()
-            
-            welcome_text = (
-                f"👋 Добро пожаловать в систему, <b>{user.first_name}!</b>\n\n"
-                "✅ Вы успешно зарегистрированы.\n\n"
-                "⚠️ <b>Права доступа не назначены.</b>\n"
-                "Обратитесь к администратору для получения прав.\n\n"
-                "После назначения прав вам будут доступны операции."
-            )
-            keyboard = get_main_menu_keyboard(new_user)
+            # Проверка - является ли пользователь главным админом
+            is_main_admin = (settings.ADMIN_TELEGRAM_ID and user.id == settings.ADMIN_TELEGRAM_ID)
+
+            if is_main_admin:
+                # Главный админ - автоматически утверждаем с полными правами
+                new_user = User(
+                    telegram_id=user.id,
+                    username=user.username,
+                    full_name=f"{user.first_name} {user.last_name or ''}".strip(),
+                    is_active=True,
+                    is_admin=True,
+                    approval_status=ApprovalStatus.approved,
+                    # Полные права для админа
+                    can_receive_materials=True,
+                    can_produce=True,
+                    can_pack=True,
+                    can_ship=True
+                )
+                session.add(new_user)
+                await session.commit()
+
+                welcome_text = (
+                    f"👋 Добро пожаловать, <b>{user.first_name}!</b>\n\n"
+                    "✅ Вы зарегистрированы как <b>администратор</b>.\n\n"
+                    "У вас есть полный доступ ко всем функциям системы.\n"
+                    "Выберите действие из меню ниже:"
+                )
+                keyboard = get_main_menu_keyboard(new_user)
+            else:
+                # Обычный пользователь - требует утверждения
+                new_user = User(
+                    telegram_id=user.id,
+                    username=user.username,
+                    full_name=f"{user.first_name} {user.last_name or ''}".strip(),
+                    is_active=True,
+                    is_admin=False,
+                    approval_status=ApprovalStatus.pending,
+                    # Нет прав до утверждения
+                    can_receive_materials=False,
+                    can_produce=False,
+                    can_pack=False,
+                    can_ship=False
+                )
+                session.add(new_user)
+                await session.commit()
+
+                welcome_text = (
+                    f"👋 Добро пожаловать в систему, <b>{user.first_name}!</b>\n\n"
+                    "✅ Вы успешно зарегистрированы.\n\n"
+                    "⏳ <b>Ваша регистрация ожидает утверждения администратором.</b>\n\n"
+                    "После утверждения вы получите доступ к системе."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+
+                # Уведомление админа о новой регистрации
+                if settings.ADMIN_TELEGRAM_ID:
+                    try:
+                        bot = message.bot
+                        await bot.send_message(
+                            chat_id=settings.ADMIN_TELEGRAM_ID,
+                            text=(
+                                f"🔔 <b>Новая регистрация!</b>\n\n"
+                                f"👤 Пользователь: {user.first_name} {user.last_name or ''}\n"
+                                f"📱 Username: @{user.username or 'не указан'}\n"
+                                f"🆔 ID: <code>{user.id}</code>\n\n"
+                                f"Используйте /admin для утверждения."
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to notify admin about new registration: {e}")
         
         await message.answer(
             welcome_text,
@@ -382,12 +451,19 @@ def register_handlers(dp) -> None:
     
     # 1. Административные панели (проверяют права)
     try:
+        from app.handlers.admin import admin_router
+        dp.include_router(admin_router)
+        logger.info("✅ Admin router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import admin router: {e}")
+
+    try:
         from app.handlers.admin_users import admin_users_router
         dp.include_router(admin_users_router)
         logger.info("✅ Admin users router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import admin_users router: {e}")
-    
+
     try:
         from app.handlers.admin_warehouse import admin_warehouse_router
         dp.include_router(admin_warehouse_router)

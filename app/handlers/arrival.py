@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database.models import SKUType, User
+from app.database.models import SKUType, User, ApprovalStatus
 from app.services import warehouse_service, stock_service
 from app.utils.keyboards import (
     get_warehouses_keyboard,
@@ -46,7 +46,6 @@ arrival_router = Router(name="arrival")
 
 class ArrivalStates(StatesGroup):
     """Состояния диалога приемки сырья."""
-    select_warehouse = State()
     select_sku = State()
     enter_quantity = State()
     enter_price = State()
@@ -90,7 +89,15 @@ async def start_arrival(
             "❌ Пользователь не найден. Используйте /start для регистрации."
         )
         return
-    
+
+    # Проверка статуса утверждения
+    if db_user.approval_status != ApprovalStatus.approved:
+        await message.answer(
+            "❌ Ваша регистрация еще не утверждена администратором.\n"
+            "Пожалуйста, ожидайте утверждения."
+        )
+        return
+
     # Проверка прав доступа
     if not db_user.can_receive_materials:
         await message.answer(
@@ -98,117 +105,68 @@ async def start_arrival(
             "Обратитесь к администратору."
         )
         return
-    
-    # Получение списка складов
+
+    # Получение склада по умолчанию
     try:
-        warehouses = await warehouse_service.get_warehouses(session, active_only=True)
-        
-        if not warehouses:
+        warehouse = await warehouse_service.get_default_warehouse(session)
+
+        if not warehouse:
             await message.answer(
-                "❌ Нет доступных складов.\n"
-                "Обратитесь к администратору для создания склада.",
+                "❌ Склад не найден.\n"
+                "Обратитесь к администратору.",
                 reply_markup=get_main_menu_keyboard()
             )
             return
-        
-        # Сохранение начальных данных в FSM
-        await state.update_data(
-            user_id=user.id,
-            started_at=datetime.utcnow().isoformat()
-        )
-        
-        # Клавиатура выбора склада
-        keyboard = get_warehouses_keyboard(warehouses, callback_prefix='arrival_wh')
-        
-        text = (
-            "📦 <b>Приемка сырья на склад</b>\n\n"
-            "Выберите склад для приемки:"
-        )
-        
-        if isinstance(update, CallbackQuery):
-            await message.edit_text(text, reply_markup=keyboard)
-        else:
-            await message.answer(text, reply_markup=keyboard)
-        
-        await state.set_state(ArrivalStates.select_warehouse)
-        
-    except Exception as e:
-        logger.error(f"Error in start_arrival: {e}", exc_info=True)
-        await message.answer(
-            f"❌ Ошибка при загрузке складов: {str(e)}",
-            reply_markup=get_main_menu_keyboard()
-        )
 
-
-# ============================================================================
-# ВЫБОР СКЛАДА
-# ============================================================================
-
-@arrival_router.callback_query(
-    StateFilter(ArrivalStates.select_warehouse),
-    F.data.startswith("arrival_wh_")
-)
-async def select_warehouse(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """
-    Обрабатывает выбор склада.
-    """
-    await callback.answer()
-    
-    # Извлечение ID склада из callback_data
-    warehouse_id = int(callback.data.split('_')[-1])
-    
-    # Загрузка информации о складе
-    try:
-        warehouse = await warehouse_service.get_warehouse(session, warehouse_id)
-        
-        # Сохранение выбора в FSM
-        await state.update_data(
-            warehouse_id=warehouse_id,
-            warehouse_name=warehouse.name
-        )
-        
         # Получение списка сырья
         skus = await stock_service.get_skus_by_type(
             session,
-            type=SKUType.RAW,
+            type=SKUType.raw,
             active_only=True
         )
-        
+
         if not skus:
-            await callback.message.answer(
+            await message.answer(
                 "❌ В системе нет сырья для приемки.\n"
                 "Обратитесь к администратору для добавления номенклатуры.",
                 reply_markup=get_main_menu_keyboard()
             )
-            await state.clear()
             return
-        
+
+        # Сохранение данных в FSM
+        await state.update_data(
+            user_id=user.id,
+            warehouse_id=warehouse.id,
+            warehouse_name=warehouse.name,
+            started_at=datetime.utcnow().isoformat()
+        )
+
         # Клавиатура выбора сырья
         keyboard = get_sku_keyboard(
             skus,
             callback_prefix='arrival_sku',
             show_stock=False
         )
-        
+
         text = (
-            f"📦 <b>Склад:</b> {warehouse.name}\n\n"
+            "📦 <b>Приемка сырья на склад</b>\n\n"
+            f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
             "📋 Выберите принимаемое сырье:"
         )
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
+
+        if isinstance(update, CallbackQuery):
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
+
         await state.set_state(ArrivalStates.select_sku)
-        
+
     except Exception as e:
-        logger.error(f"Error in select_warehouse: {e}", exc_info=True)
-        await callback.message.answer(
-            f"❌ Ошибка: {str(e)}",
+        logger.error(f"Error in start_arrival: {e}", exc_info=True)
+        await message.answer(
+            f"❌ Ошибка при загрузке данных: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
-        await state.clear()
 
 
 # ============================================================================
