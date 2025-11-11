@@ -53,3 +53,7 @@ htmlcov/
 
 # Alembic
 alembic/versions/*.pyc
+
+# Deployment
+backups/
+deploy.log
