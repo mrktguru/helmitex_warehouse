@@ -34,9 +34,12 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     if is_admin:
         builder.row(
             KeyboardButton(text="⚙️ Управление"),
+            KeyboardButton(text="📚 Справочники")
+        )
+        builder.row(
             KeyboardButton(text="📈 Отчеты")
         )
-    
+
     return builder.as_markup(resize_keyboard=True)
 
 
