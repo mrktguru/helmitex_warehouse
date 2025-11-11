@@ -1,0 +1,68 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Позволяет запускать вручную через GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            echo "========================================"
+            echo "🚀 Starting deployment..."
+            echo "========================================"
+
+            # Переход в директорию проекта
+            cd ${{ secrets.PROJECT_PATH || '/root/helmitex_warehouse' }}
+
+            echo "📥 Pulling latest code from main branch..."
+            git fetch origin
+            git reset --hard origin/main
+
+            echo "📦 Checking Docker and Docker Compose..."
+            docker --version
+            docker compose version || docker-compose --version
+
+            echo "🛑 Stopping current containers..."
+            docker compose down || docker-compose down || true
+
+            echo "🏗️ Building Docker images..."
+            docker compose build --no-cache || docker-compose build --no-cache
+
+            echo "🚀 Starting containers..."
+            docker compose up -d || docker-compose up -d
+
+            echo "⏳ Waiting for services to start..."
+            sleep 10
+
+            echo "🔍 Checking container status..."
+            docker compose ps || docker-compose ps
+
+            echo "📋 Showing recent logs..."
+            docker compose logs --tail=50 bot || docker-compose logs --tail=50 bot
+
+            echo "========================================"
+            echo "✅ Deployment completed successfully!"
+            echo "========================================"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed! Check the logs above."
+          exit 1
