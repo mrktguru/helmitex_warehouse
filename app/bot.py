@@ -470,7 +470,15 @@ def register_handlers(dp) -> None:
         logger.info("✅ Admin warehouse router registered")
     except ImportError as e:
         logger.warning(f"⚠️ Could not import admin_warehouse router: {e}")
-    
+
+    # 2. Справочники
+    try:
+        from app.handlers.categories import categories_router
+        dp.include_router(categories_router)
+        logger.info("✅ Categories router registered")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import categories router: {e}")
+
     # 3. ✅ ИСПРАВЛЕННЫЕ импорты основных бизнес-процессов
     try:
         from app.handlers.arrival import arrival_router

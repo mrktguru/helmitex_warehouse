@@ -463,6 +463,38 @@ async def toggle_permission(
 # ВОЗВРАТ В ГЛАВНОЕ МЕНЮ
 # ============================================================================
 
+# ============================================================================
+# ОБРАБОТЧИК КНОПКИ "⚙️ УПРАВЛЕНИЕ"
+# ============================================================================
+
+@admin_router.message(F.text == "⚙️ Управление")
+async def management_menu(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """Меню управления (аналог /admin)."""
+    # Проверяем, что пользователь является администратором
+    stmt = select(User).where(User.telegram_id == message.from_user.id)
+    db_user = await session.scalar(stmt)
+
+    if not db_user or not db_user.is_admin:
+        await message.answer(
+            "❌ У вас нет прав доступа к этой функции.",
+            reply_markup=get_main_menu_keyboard(False)
+        )
+        return
+
+    # Отображение меню администрирования
+    text = (
+        "⚙️ <b>Меню управления</b>\n\n"
+        "Выберите действие:"
+    )
+
+    await message.answer(text, reply_markup=get_admin_menu_keyboard())
+    await state.set_state(AdminStates.main_menu)
+
+
 @admin_router.callback_query(F.data == "admin_back")
 async def admin_back(
     callback: CallbackQuery,
