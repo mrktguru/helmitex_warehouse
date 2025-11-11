@@ -804,7 +804,7 @@ async def list_sku_by_type(query: CallbackQuery, state: FSMContext, session: Asy
         if sku_type:
             skus = await stock_service.get_skus_by_type(
                 session,
-                sku_type=sku_type,
+                type=sku_type,
                 active_only=False
             )
         else:
@@ -931,7 +931,7 @@ async def create_recipe_name(message: Message, state: FSMContext, session: Async
         # Получение полуфабрикатов
         semi_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.semi,
+            type=SKUType.semi,
             active_only=True
         )
 
@@ -1157,7 +1157,7 @@ async def show_add_component_menu(message: Message, state: FSMContext, session: 
         # Получение сырья
         raw_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.raw,
+            type=SKUType.raw,
             active_only=True
         )
         
@@ -1611,7 +1611,7 @@ async def create_variant_start(query: CallbackQuery, state: FSMContext, session:
         # Получение полуфабрикатов
         semi_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.semi,
+            type=SKUType.semi,
             active_only=True
         )
 
@@ -1675,7 +1675,7 @@ async def create_variant_semi(query: CallbackQuery, state: FSMContext, session: 
         # Получение готовой продукции
         finished_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.finished,
+            type=SKUType.finished,
             active_only=True
         )
         

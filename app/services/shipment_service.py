@@ -359,7 +359,7 @@ async def add_shipment_item(
     if not sku:
         raise ValueError(f"SKU с ID {sku_id} не найден")
     
-    if sku.sku_type != SKUType.FINISHED:
+    if sku.type != SKUType.finished:
         raise ValueError(f"SKU '{sku.name}' не является готовой продукцией")
     
     # Валидация количества

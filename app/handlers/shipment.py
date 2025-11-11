@@ -433,7 +433,7 @@ async def show_add_item_menu(
         # Получение готовой продукции со склада
         finished_skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.FINISHED,
+            type=SKUType.finished,
             active_only=True
         )
         

@@ -121,7 +121,7 @@ async def start_arrival(
         # Получение списка сырья
         skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.raw,
+            type=SKUType.raw,
             active_only=True
         )
 

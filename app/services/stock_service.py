@@ -5,10 +5,11 @@
 """
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from datetime import datetime
 
-from app.database.models import Stock, SKU, Warehouse
+from app.database.models import Stock, SKU, Warehouse, SKUType
 from app.logger import get_logger
 
 logger = get_logger("stock_service")
@@ -267,53 +268,60 @@ def get_sku(db: Session, sku_id: int) -> Optional['SKU']:
     ).scalar_one_or_none()
 
 
-def get_skus_by_type(
-    db: Session,
-    type: 'SKUType'
-) -> List['SKU']:
+async def get_skus_by_type(
+    db: AsyncSession,
+    type: SKUType,
+    active_only: bool = False
+) -> List[SKU]:
     """
     Получить номенклатуру по типу.
-    
+
     Args:
-        db: Сессия БД
+        db: Асинхронная сессия БД
         type: Тип (raw/semi/finished)
-        
+        active_only: Только активные номенклатуры
+
     Returns:
         List[SKU]: Список номенклатур
     """
-    skus = db.execute(
-        select(SKU).where(SKU.type == type)
-    ).scalars().all()
-    
-    logger.debug(f"Найдено {len(skus)} номенклатур типа {type.value}")
+    query = select(SKU).where(SKU.type == type)
+
+    if active_only:
+        query = query.where(SKU.is_active == True)
+
+    result = await db.execute(query)
+    skus = result.scalars().all()
+
+    logger.debug(f"Найдено {len(skus)} номенклатур типа {type.value} (active_only={active_only})")
     return list(skus)
 
 
-def get_stock_by_warehouse_and_type(
-    db: Session,
+async def get_stock_by_warehouse_and_type(
+    db: AsyncSession,
     warehouse_id: int,
-    type: 'SKUType'
+    type: SKUType
 ) -> List[Stock]:
     """
     Получить остатки на складе по типу номенклатуры.
-    
+
     Args:
-        db: Сессия БД
+        db: Асинхронная сессия БД
         warehouse_id: ID склада
         type: Тип номенклатуры (raw/semi/finished)
-        
+
     Returns:
         List[Stock]: Список остатков
     """
-    stocks = db.execute(
+    result = await db.execute(
         select(Stock).join(SKU).where(
             and_(
                 Stock.warehouse_id == warehouse_id,
                 SKU.type == type
             )
         )
-    ).scalars().all()
-    
+    )
+    stocks = result.scalars().all()
+
     logger.debug(
         f"Найдено {len(stocks)} остатков типа {type.value} на складе {warehouse_id}"
     )
