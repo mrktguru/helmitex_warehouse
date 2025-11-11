@@ -73,8 +73,9 @@ def get_main_menu_keyboard(user: User | None = None) -> InlineKeyboardMarkup:
         # Дополнительные функции только для администратора
         if user.is_admin:
             buttons.append([InlineKeyboardButton(text="📜 История", callback_data='history_start')])
+            buttons.append([InlineKeyboardButton(text="⚙️ Управление", callback_data='admin_start')])
+            buttons.append([InlineKeyboardButton(text="📚 Справочники", callback_data='ref_main')])
             buttons.append([InlineKeyboardButton(text="❓ Справка", callback_data='help')])
-            buttons.append([InlineKeyboardButton(text="👨‍💼 Администрирование", callback_data='admin_start')])
     else:
         # Меню для незарегистрированного пользователя
         buttons.append([InlineKeyboardButton(text="📖 Справка", callback_data='help')])
