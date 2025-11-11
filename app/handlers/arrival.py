@@ -174,7 +174,7 @@ async def select_warehouse(
         # Получение списка сырья
         skus = await stock_service.get_skus_by_type(
             session,
-            sku_type=SKUType.RAW,
+            type=SKUType.RAW,
             active_only=True
         )
         

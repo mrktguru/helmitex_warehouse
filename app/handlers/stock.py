@@ -261,7 +261,7 @@ async def view_stock_by_type(
             stocks = await stock_service.get_stock_by_warehouse_and_type(
                 session,
                 warehouse_id=warehouse_id,
-                sku_type=sku_type
+                type=sku_type
             )
         else:
             stocks = await stock_service.get_all_stock_by_warehouse(
@@ -586,19 +586,19 @@ async def view_overall_statistics(
             raw_stocks = await stock_service.get_stock_by_warehouse_and_type(
                 session,
                 warehouse_id=warehouse.id,
-                sku_type=SKUType.RAW
+                type=SKUType.RAW
             )
             
             semi_stocks = await stock_service.get_stock_by_warehouse_and_type(
                 session,
                 warehouse_id=warehouse.id,
-                sku_type=SKUType.SEMI_FINISHED
+                type=SKUType.SEMI_FINISHED
             )
             
             finished_stocks = await stock_service.get_stock_by_warehouse_and_type(
                 session,
                 warehouse_id=warehouse.id,
-                sku_type=SKUType.FINISHED
+                type=SKUType.FINISHED
             )
             
             # Бочки
