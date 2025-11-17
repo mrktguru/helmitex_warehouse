@@ -238,8 +238,8 @@ async def view_category(
         f"📝 <b>Описание:</b> {category.description or '—'}\n"
         f"🔢 <b>Порядок сортировки:</b> {category.sort_order}\n\n"
         f"📊 <b>Статистика:</b>\n"
-        f"• Товаров в категории: {stats['sku_count']}\n"
-        f"• Активных товаров: {stats['active_sku_count']}\n"
+        f"• Товаров в категории: {stats['total_skus']}\n"
+        f"• Активных товаров: {stats['active_skus']}\n"
     )
 
     await callback.message.edit_text(text, reply_markup=get_category_view_keyboard(category_id))
@@ -729,9 +729,9 @@ async def delete_category(
             lambda sync_session: category_service.get_category_stats(sync_session, category_id)
         )
 
-        if stats['sku_count'] > 0:
+        if stats['total_skus'] > 0:
             await callback.answer(
-                f"❌ Невозможно удалить категорию. В ней есть {stats['sku_count']} товар(ов).",
+                f"❌ Невозможно удалить категорию. В ней есть {stats['total_skus']} товар(ов).",
                 show_alert=True
             )
             return
