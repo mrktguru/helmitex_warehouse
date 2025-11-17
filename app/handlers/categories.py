@@ -17,7 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.database.models import User, Category
+from app.database.models import User, Category, SKU
 from app.services import category_service
 from app.utils.logger import get_logger
 from app.utils.keyboards import get_main_menu_keyboard
@@ -84,6 +84,8 @@ def get_categories_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
 def get_category_view_keyboard(category_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для просмотра категории."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Товары в категории", callback_data=f'cat_skus_{category_id}')],
+        [InlineKeyboardButton(text="➕ Добавить товар", callback_data=f'cat_add_sku_{category_id}')],
         [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f'cat_edit_{category_id}')],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f'cat_delete_{category_id}')],
         [InlineKeyboardButton(text="🔙 К списку", callback_data='cat_list')],
@@ -801,6 +803,179 @@ async def cancel_operation(
 
     await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories))
     await state.set_state(CategoryStates.list_categories)
+
+
+# ============================================================================
+# ТОВАРЫ В КАТЕГОРИИ
+# ============================================================================
+
+@categories_router.callback_query(F.data.startswith("cat_skus_"))
+async def view_category_skus(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """Показать товары в категории."""
+    await callback.answer()
+
+    # Извлечение ID категории
+    category_id = int(callback.data.split('_')[2])
+
+    # Получение категории
+    category = await session.run_sync(
+        lambda sync_session: category_service.get_category(sync_session, category_id)
+    )
+
+    if not category:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    # Получение товаров в категории
+    stmt = select(SKU).where(SKU.category_id == category_id).order_by(SKU.name)
+    result = await session.execute(stmt)
+    skus = result.scalars().all()
+
+    if not skus:
+        text = (
+            f"📦 <b>{category.name}</b>\n\n"
+            "Товаров в этой категории пока нет.\n\n"
+            "Используйте кнопку '➕ Добавить товар' для добавления товара в категорию."
+        )
+    else:
+        sku_list = "\n".join([
+            f"• {sku.name} ({sku.code}) - {sku.type.value}"
+            for sku in skus
+        ])
+
+        text = (
+            f"📦 <b>{category.name}</b>\n\n"
+            f"Всего товаров: {len(skus)}\n\n"
+            f"{sku_list}"
+        )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@categories_router.callback_query(F.data.startswith("cat_add_sku_"))
+async def add_sku_to_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """Добавить товар в категорию."""
+    await callback.answer()
+
+    # Извлечение ID категории
+    category_id = int(callback.data.split('_')[3])
+
+    # Получение категории
+    category = await session.run_sync(
+        lambda sync_session: category_service.get_category(sync_session, category_id)
+    )
+
+    if not category:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    # Получение всех товаров без категории или сырья
+    stmt = select(SKU).where(
+        (SKU.category_id.is_(None)) | (SKU.category_id == category_id)
+    ).where(SKU.type == 'raw').order_by(SKU.name)
+    result = await session.execute(stmt)
+    skus = result.scalars().all()
+
+    if not skus:
+        text = (
+            f"📦 <b>{category.name}</b>\n\n"
+            "Нет доступных товаров для добавления в категорию.\n\n"
+            "Сначала создайте товары типа 'сырье' через раздел 'Приход сырья'."
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
+        await callback.message.edit_text(text, reply_markup=builder.as_markup())
+        return
+
+    text = (
+        f"📦 <b>{category.name}</b>\n\n"
+        "Выберите товар для добавления в категорию:"
+    )
+
+    builder = InlineKeyboardBuilder()
+    for sku in skus:
+        status = "✅" if sku.category_id == category_id else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{status} {sku.name} ({sku.code})",
+                callback_data=f'cat_assign_{category_id}_{sku.id}'
+            )
+        )
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@categories_router.callback_query(F.data.startswith("cat_assign_"))
+async def assign_sku_to_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """Назначить товар категории."""
+    await callback.answer()
+
+    # Извлечение ID категории и SKU
+    parts = callback.data.split('_')
+    category_id = int(parts[2])
+    sku_id = int(parts[3])
+
+    # Получение SKU
+    stmt = select(SKU).where(SKU.id == sku_id)
+    result = await session.execute(stmt)
+    sku = result.scalar_one_or_none()
+
+    if not sku:
+        await callback.answer("❌ Товар не найден", show_alert=True)
+        return
+
+    # Назначение категории
+    sku.category_id = category_id
+    await session.commit()
+
+    await callback.answer(f"✅ Товар '{sku.name}' добавлен в категорию", show_alert=True)
+
+    # Вернуться к списку товаров
+    # Получение категории
+    category = await session.run_sync(
+        lambda sync_session: category_service.get_category(sync_session, category_id)
+    )
+
+    # Получение всех товаров без категории или сырья
+    stmt = select(SKU).where(
+        (SKU.category_id.is_(None)) | (SKU.category_id == category_id)
+    ).where(SKU.type == 'raw').order_by(SKU.name)
+    result = await session.execute(stmt)
+    skus = result.scalars().all()
+
+    text = (
+        f"📦 <b>{category.name}</b>\n\n"
+        "Выберите товар для добавления в категорию:"
+    )
+
+    builder = InlineKeyboardBuilder()
+    for s in skus:
+        status = "✅" if s.category_id == category_id else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{status} {s.name} ({s.code})",
+                callback_data=f'cat_assign_{category_id}_{s.id}'
+            )
+        )
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
 
 
 # ============================================================================
