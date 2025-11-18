@@ -58,14 +58,21 @@ def get_references_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def get_categories_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+def get_categories_keyboard(categories: list[Category], stats_dict: dict = None) -> InlineKeyboardMarkup:
     """Клавиатура со списком категорий."""
     builder = InlineKeyboardBuilder()
 
     for category in categories:
+        # Показываем количество товаров вместо кода
+        if stats_dict and category.id in stats_dict:
+            count = stats_dict[category.id]
+            text = f"{category.name} ({count})"
+        else:
+            text = f"{category.name} (0)"
+
         builder.row(
             InlineKeyboardButton(
-                text=f"{category.name} ({category.code})",
+                text=text,
                 callback_data=f'cat_view_{category.id}'
             )
         )
@@ -189,13 +196,21 @@ async def list_categories(
             "📦 <b>Категории сырья</b>\n\n"
             "Категорий пока нет. Добавьте первую категорию."
         )
+        stats_dict = {}
     else:
+        # Получение количества товаров для каждой категории
+        stmt = select(SKU.category_id, func.count(SKU.id)).where(
+            SKU.category_id.in_([c.id for c in categories])
+        ).group_by(SKU.category_id)
+        result = await session.execute(stmt)
+        stats_dict = {category_id: count for category_id, count in result.all()}
+
         text = (
             f"📦 <b>Категории сырья</b> (всего: {len(categories)})\n\n"
             "Выберите категорию для просмотра:"
         )
 
-    await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories))
+    await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories, stats_dict))
     await state.set_state(CategoryStates.list_categories)
 
 
@@ -334,6 +349,13 @@ async def create_category_name(
             lambda sync_session: category_service.get_all_categories(sync_session, sort_by_order=True)
         )
 
+        # Получение количества товаров для каждой категории
+        stmt = select(SKU.category_id, func.count(SKU.id)).where(
+            SKU.category_id.in_([c.id for c in categories])
+        ).group_by(SKU.category_id)
+        result = await session.execute(stmt)
+        stats_dict = {category_id: count for category_id, count in result.all()}
+
         await message.answer(text)
 
         list_text = (
@@ -341,7 +363,7 @@ async def create_category_name(
             "Выберите категорию для просмотра:"
         )
 
-        await message.answer(list_text, reply_markup=get_categories_keyboard(categories))
+        await message.answer(list_text, reply_markup=get_categories_keyboard(categories, stats_dict))
         await state.set_state(CategoryStates.list_categories)
 
     except ValueError as e:
@@ -587,13 +609,23 @@ async def delete_category(
                     lambda sync_session: category_service.get_all_categories(sync_session, sort_by_order=True)
                 )
 
+                # Получение количества товаров для каждой категории
+                if categories:
+                    stmt = select(SKU.category_id, func.count(SKU.id)).where(
+                        SKU.category_id.in_([c.id for c in categories])
+                    ).group_by(SKU.category_id)
+                    result = await session.execute(stmt)
+                    stats_dict = {category_id: count for category_id, count in result.all()}
+                else:
+                    stats_dict = {}
+
                 text = (
                     f"📦 <b>Категории сырья</b> (всего: {len(categories)})\n\n"
                     "✅ Категория успешно удалена.\n\n"
                     "Выберите категорию для просмотра:"
                 )
 
-                await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories))
+                await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories, stats_dict))
                 await state.set_state(CategoryStates.list_categories)
             else:
                 await callback.answer("❌ Не удалось удалить категорию", show_alert=True)
@@ -621,12 +653,22 @@ async def cancel_operation(
         lambda sync_session: category_service.get_all_categories(sync_session, sort_by_order=True)
     )
 
+    # Получение количества товаров для каждой категории
+    if categories:
+        stmt = select(SKU.category_id, func.count(SKU.id)).where(
+            SKU.category_id.in_([c.id for c in categories])
+        ).group_by(SKU.category_id)
+        result = await session.execute(stmt)
+        stats_dict = {category_id: count for category_id, count in result.all()}
+    else:
+        stats_dict = {}
+
     text = (
         f"📦 <b>Категории сырья</b> (всего: {len(categories)})\n\n"
         "Выберите категорию для просмотра:"
     )
 
-    await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories))
+    await callback.message.edit_text(text, reply_markup=get_categories_keyboard(categories, stats_dict))
     await state.set_state(CategoryStates.list_categories)
 
 
