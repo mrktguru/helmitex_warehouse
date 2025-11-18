@@ -358,7 +358,7 @@ def receive_materials(
 ) -> Stock:
     """
     Приёмка материалов на склад (приход).
-    
+
     Args:
         db: Сессия БД
         warehouse_id: ID склада
@@ -366,21 +366,21 @@ def receive_materials(
         quantity: Количество
         user_id: ID пользователя
         notes: Примечания
-        
+
     Returns:
         Stock: Обновлённый остаток
-        
+
     Raises:
         ValueError: Если quantity <= 0
     """
     from app.database.models import Movement, MovementType
-    
+
     if quantity <= 0:
         raise ValueError("Количество должно быть положительным")
-    
+
     # Обновляем остаток
     stock = update_stock(db, warehouse_id, sku_id, quantity)
-    
+
     # Создаем movement (приход)
     movement = Movement(
         warehouse_id=warehouse_id,
@@ -391,14 +391,99 @@ def receive_materials(
         notes=notes or "Приёмка материалов"
     )
     db.add(movement)
-    
+
     db.flush()
     db.refresh(stock)
-    
+
     logger.info(
         f"Приёмка: склад={warehouse_id}, SKU={sku_id}, "
         f"количество={quantity}, пользователь={user_id}"
     )
-    
+
     return stock
+
+
+async def receive_materials_async(
+    session: AsyncSession,
+    warehouse_id: int,
+    sku_id: int,
+    quantity: float,
+    user_id: int,
+    price_per_unit: Optional[float] = None,
+    supplier: Optional[str] = None,
+    document_number: Optional[str] = None,
+    notes: Optional[str] = None
+) -> tuple[Stock, 'Movement']:
+    """
+    Асинхронная приёмка материалов на склад (приход).
+
+    Args:
+        session: Async сессия БД
+        warehouse_id: ID склада
+        sku_id: ID номенклатуры
+        quantity: Количество
+        user_id: ID пользователя
+        price_per_unit: Цена за единицу
+        supplier: Поставщик
+        document_number: Номер документа
+        notes: Примечания
+
+    Returns:
+        tuple[Stock, Movement]: Обновлённый остаток и движение
+
+    Raises:
+        ValueError: Если quantity <= 0
+    """
+    from app.database.models import Movement, MovementType
+    from decimal import Decimal
+
+    if quantity <= 0:
+        raise ValueError("Количество должно быть положительным")
+
+    # Получаем или создаем остаток
+    stmt = select(Stock).where(
+        Stock.warehouse_id == warehouse_id,
+        Stock.sku_id == sku_id
+    )
+    result = await session.execute(stmt)
+    stock = result.scalar_one_or_none()
+
+    if not stock:
+        # Создаем новую запись остатка
+        stock = Stock(
+            warehouse_id=warehouse_id,
+            sku_id=sku_id,
+            quantity=Decimal(str(quantity))
+        )
+        session.add(stock)
+    else:
+        # Обновляем существующий остаток
+        stock.quantity += Decimal(str(quantity))
+        stock.updated_at = datetime.utcnow()
+
+    # Создаем movement (приход)
+    movement = Movement(
+        warehouse_id=warehouse_id,
+        sku_id=sku_id,
+        type=MovementType.receipt,
+        quantity=Decimal(str(quantity)),
+        price_per_unit=Decimal(str(price_per_unit)) if price_per_unit else None,
+        user_id=user_id,
+        supplier=supplier,
+        document_number=document_number,
+        notes=notes or "Приёмка материалов"
+    )
+    session.add(movement)
+
+    await session.flush()
+    await session.refresh(stock)
+    await session.refresh(movement)
+
+    logger.info(
+        f"Приёмка: склад={warehouse_id}, SKU={sku_id}, "
+        f"количество={quantity}, пользователь={user_id}, "
+        f"поставщик={supplier}, документ={document_number}"
+    )
+
+    return stock, movement
  
