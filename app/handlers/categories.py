@@ -37,14 +37,13 @@ class CategoryStates(StatesGroup):
     main_menu = State()
     list_categories = State()
     create_name = State()
-    create_code = State()
-    create_description = State()
     edit_select_field = State()
     edit_name = State()
-    edit_code = State()
-    edit_description = State()
     edit_sort_order = State()
     confirm_delete = State()
+    # Состояния для создания товара в категории
+    sku_create_name = State()
+    sku_create_unit = State()
 
 
 # ============================================================================
@@ -85,7 +84,7 @@ def get_category_view_keyboard(category_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для просмотра категории."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📦 Товары в категории", callback_data=f'cat_skus_{category_id}')],
-        [InlineKeyboardButton(text="➕ Добавить товар", callback_data=f'cat_add_sku_{category_id}')],
+        [InlineKeyboardButton(text="➕ Создать товар", callback_data=f'cat_add_sku_{category_id}')],
         [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f'cat_edit_{category_id}')],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f'cat_delete_{category_id}')],
         [InlineKeyboardButton(text="🔙 К списку", callback_data='cat_list')],
@@ -96,8 +95,6 @@ def get_category_edit_keyboard(category_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для выбора поля редактирования."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Название", callback_data=f'cat_edit_name_{category_id}')],
-        [InlineKeyboardButton(text="Код", callback_data=f'cat_edit_code_{category_id}')],
-        [InlineKeyboardButton(text="Описание", callback_data=f'cat_edit_desc_{category_id}')],
         [InlineKeyboardButton(text="Порядок сортировки", callback_data=f'cat_edit_sort_{category_id}')],
         [InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}')],
     ])
@@ -234,9 +231,6 @@ async def view_category(
 
     text = (
         f"📦 <b>{category.name}</b>\n\n"
-        f"🔤 <b>Код:</b> {category.code or '—'}\n"
-        f"📝 <b>Описание:</b> {category.description or '—'}\n"
-        f"🔢 <b>Порядок сортировки:</b> {category.sort_order}\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"• Товаров в категории: {stats['total_skus']}\n"
         f"• Активных товаров: {stats['active_skus']}\n"
@@ -273,7 +267,7 @@ async def create_category_name(
     state: FSMContext,
     session: AsyncSession
 ) -> None:
-    """Получение названия новой категории."""
+    """Получение названия и создание категории."""
     name = message.text.strip()
 
     if not name or len(name) < 2:
@@ -283,75 +277,40 @@ async def create_category_name(
         )
         return
 
-    # Сохранение названия
-    await state.update_data(name=name)
+    # Автоматическая генерация кода из названия
+    import re
+    import transliterate
 
-    text = (
-        "➕ <b>Создание новой категории</b>\n\n"
-        f"📝 Название: <b>{name}</b>\n\n"
-        "Введите код категории (латинскими буквами, без пробелов):"
-    )
+    # Транслитерация названия (если есть кириллица)
+    try:
+        code = transliterate.translit(name, 'ru', reversed=True).lower()
+    except:
+        code = name.lower()
 
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(CategoryStates.create_code)
+    # Убираем все кроме букв и цифр
+    code = re.sub(r'[^a-z0-9]', '_', code)
+    # Убираем повторяющиеся подчеркивания
+    code = re.sub(r'_+', '_', code)
+    # Убираем подчеркивания в начале и конце
+    code = code.strip('_')
 
+    # Если код пустой, генерируем на основе счетчика
+    if not code:
+        import time
+        code = f"cat_{int(time.time())}"
 
-@categories_router.message(CategoryStates.create_code)
-async def create_category_code(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """Получение кода новой категории."""
-    code = message.text.strip().lower()
-
-    # Валидация кода
-    if not code or len(code) < 2:
-        await message.answer(
-            "❌ Код должен содержать минимум 2 символа. Попробуйте ещё раз:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
-    if not code.isalnum() or not code.isascii():
-        await message.answer(
-            "❌ Код должен содержать только латинские буквы и цифры без пробелов. Попробуйте ещё раз:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
-    # Сохранение кода
-    await state.update_data(code=code)
-
-    data = await state.get_data()
-
-    text = (
-        "➕ <b>Создание новой категории</b>\n\n"
-        f"📝 Название: <b>{data['name']}</b>\n"
-        f"🔤 Код: <b>{code}</b>\n\n"
-        "Введите описание категории (или отправьте '-' чтобы пропустить):"
-    )
-
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(CategoryStates.create_description)
-
-
-@categories_router.message(CategoryStates.create_description)
-async def create_category_description(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """Получение описания и создание категории."""
-    description = message.text.strip()
-
-    if description == '-':
-        description = None
-
-    # Получение данных из состояния
-    data = await state.get_data()
-    name = data['name']
-    code = data['code']
+    # Проверяем уникальность кода
+    from app.database.models import Category
+    base_code = code
+    counter = 1
+    while True:
+        stmt = select(Category).where(Category.code == code)
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if not existing:
+            break
+        code = f"{base_code}_{counter}"
+        counter += 1
 
     try:
         # Создание категории
@@ -360,16 +319,14 @@ async def create_category_description(
                 sync_session,
                 name=name,
                 code=code,
-                description=description
+                description=None
             )
         )
         await session.commit()
 
         text = (
             "✅ <b>Категория успешно создана!</b>\n\n"
-            f"📦 <b>{category.name}</b>\n"
-            f"🔤 Код: {category.code}\n"
-            f"📝 Описание: {category.description or '—'}\n"
+            f"📦 <b>{category.name}</b>"
         )
 
         # Получение всех категорий для обновленного списка
@@ -389,8 +346,7 @@ async def create_category_description(
 
     except ValueError as e:
         await message.answer(
-            f"❌ Ошибка при создании категории: {str(e)}\n\n"
-            "Попробуйте ещё раз с другим кодом:",
+            f"❌ Ошибка при создании категории: {str(e)}",
             reply_markup=get_cancel_keyboard()
         )
     except Exception as e:
@@ -839,7 +795,7 @@ async def view_category_skus(
         text = (
             f"📦 <b>{category.name}</b>\n\n"
             "Товаров в этой категории пока нет.\n\n"
-            "Используйте кнопку '➕ Добавить товар' для добавления товара в категорию."
+            "Используйте кнопку '➕ Создать товар' для создания нового товара в категории."
         )
     else:
         sku_list = "\n".join([
@@ -860,12 +816,12 @@ async def view_category_skus(
 
 
 @categories_router.callback_query(F.data.startswith("cat_add_sku_"))
-async def add_sku_to_category(
+async def create_sku_in_category_start(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession
 ) -> None:
-    """Добавить товар в категорию."""
+    """Начать создание нового товара в категории."""
     await callback.answer()
 
     # Извлечение ID категории
@@ -880,102 +836,181 @@ async def add_sku_to_category(
         await callback.answer("❌ Категория не найдена", show_alert=True)
         return
 
-    # Получение всех товаров без категории или сырья
-    stmt = select(SKU).where(
-        (SKU.category_id.is_(None)) | (SKU.category_id == category_id)
-    ).where(SKU.type == 'raw').order_by(SKU.name)
-    result = await session.execute(stmt)
-    skus = result.scalars().all()
-
-    if not skus:
-        text = (
-            f"📦 <b>{category.name}</b>\n\n"
-            "Нет доступных товаров для добавления в категорию.\n\n"
-            "Сначала создайте товары типа 'сырье' через раздел 'Приход сырья'."
-        )
-        builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
-        await callback.message.edit_text(text, reply_markup=builder.as_markup())
-        return
+    # Сохраняем ID категории в состоянии
+    await state.update_data(category_id=category_id)
 
     text = (
-        f"📦 <b>{category.name}</b>\n\n"
-        "Выберите товар для добавления в категорию:"
+        f"➕ <b>Создание товара в категории</b>\n\n"
+        f"📦 Категория: <b>{category.name}</b>\n\n"
+        "Введите название товара:"
     )
 
-    builder = InlineKeyboardBuilder()
-    for sku in skus:
-        status = "✅" if sku.category_id == category_id else ""
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{status} {sku.name} ({sku.code})",
-                callback_data=f'cat_assign_{category_id}_{sku.id}'
-            )
-        )
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
-
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+    await state.set_state(CategoryStates.sku_create_name)
 
 
-@categories_router.callback_query(F.data.startswith("cat_assign_"))
-async def assign_sku_to_category(
-    callback: CallbackQuery,
+@categories_router.message(CategoryStates.sku_create_name)
+async def create_sku_name(
+    message: Message,
     state: FSMContext,
     session: AsyncSession
 ) -> None:
-    """Назначить товар категории."""
-    await callback.answer()
+    """Получение названия товара."""
+    name = message.text.strip()
 
-    # Извлечение ID категории и SKU
-    parts = callback.data.split('_')
-    category_id = int(parts[2])
-    sku_id = int(parts[3])
-
-    # Получение SKU
-    stmt = select(SKU).where(SKU.id == sku_id)
-    result = await session.execute(stmt)
-    sku = result.scalar_one_or_none()
-
-    if not sku:
-        await callback.answer("❌ Товар не найден", show_alert=True)
+    if not name or len(name) < 2:
+        await message.answer(
+            "❌ Название должно содержать минимум 2 символа. Попробуйте ещё раз:",
+            reply_markup=get_cancel_keyboard()
+        )
         return
 
-    # Назначение категории
-    sku.category_id = category_id
-    await session.commit()
+    # Сохранение названия
+    await state.update_data(sku_name=name)
 
-    await callback.answer(f"✅ Товар '{sku.name}' добавлен в категорию", show_alert=True)
+    # Клавиатура выбора единицы измерения
+    from app.database.models import UnitType
 
-    # Вернуться к списку товаров
-    # Получение категории
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="кг (килограммы)", callback_data='sku_unit_kg'))
+    builder.row(InlineKeyboardButton(text="л (литры)", callback_data='sku_unit_liters'))
+    builder.row(InlineKeyboardButton(text="г (граммы)", callback_data='sku_unit_grams'))
+    builder.row(InlineKeyboardButton(text="шт (штуки)", callback_data='sku_unit_pieces'))
+    builder.row(InlineKeyboardButton(text="🔙 Отмена", callback_data='cat_cancel'))
+
+    data = await state.get_data()
+    category_id = data['category_id']
     category = await session.run_sync(
         lambda sync_session: category_service.get_category(sync_session, category_id)
     )
 
-    # Получение всех товаров без категории или сырья
-    stmt = select(SKU).where(
-        (SKU.category_id.is_(None)) | (SKU.category_id == category_id)
-    ).where(SKU.type == 'raw').order_by(SKU.name)
-    result = await session.execute(stmt)
-    skus = result.scalars().all()
-
     text = (
-        f"📦 <b>{category.name}</b>\n\n"
-        "Выберите товар для добавления в категорию:"
+        f"➕ <b>Создание товара</b>\n\n"
+        f"📦 Категория: <b>{category.name}</b>\n"
+        f"📝 Название: <b>{name}</b>\n\n"
+        "Выберите единицу измерения:"
     )
 
-    builder = InlineKeyboardBuilder()
-    for s in skus:
-        status = "✅" if s.category_id == category_id else ""
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{status} {s.name} ({s.code})",
-                callback_data=f'cat_assign_{category_id}_{s.id}'
-            )
-        )
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f'cat_view_{category_id}'))
+    await message.answer(text, reply_markup=builder.as_markup())
+    await state.set_state(CategoryStates.sku_create_unit)
 
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+@categories_router.callback_query(F.data.startswith("sku_unit_"))
+async def create_sku_unit(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """Получение единицы измерения и создание товара."""
+    await callback.answer()
+
+    # Извлечение единицы измерения
+    unit_code = callback.data.split('_')[2]  # kg, liters, grams, pieces
+
+    # Получение данных из состояния
+    data = await state.get_data()
+    category_id = data['category_id']
+    sku_name = data['sku_name']
+
+    # Автоматическая генерация кода из названия товара
+    import re
+    import time
+
+    # Простая транслитерация
+    translit_map = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch', 'ъ': '',
+        'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+    }
+
+    code = sku_name.lower()
+    for cyr, lat in translit_map.items():
+        code = code.replace(cyr, lat)
+
+    # Убираем все кроме букв и цифр
+    code = re.sub(r'[^a-z0-9]', '_', code)
+    # Убираем повторяющиеся подчеркивания
+    code = re.sub(r'_+', '_', code)
+    # Убираем подчеркивания в начале и конце
+    code = code.strip('_')
+
+    # Если код пустой, генерируем на основе счетчика
+    if not code:
+        code = f"sku_{int(time.time())}"
+
+    # Проверяем уникальность кода
+    from app.database.models import SKU as SKUModel
+    base_code = code
+    counter = 1
+    while True:
+        stmt = select(SKUModel).where(SKUModel.code == code)
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if not existing:
+            break
+        code = f"{base_code}_{counter}"
+        counter += 1
+
+    try:
+        # Создание товара
+        from app.database.models import SKUType, UnitType
+
+        new_sku = SKUModel(
+            code=code,
+            name=sku_name,
+            type=SKUType.raw,
+            category_id=category_id,
+            unit=UnitType[unit_code],
+            min_stock=0,  # По умолчанию 0
+            is_active=True
+        )
+
+        session.add(new_sku)
+        await session.commit()
+        await session.refresh(new_sku)
+
+        unit_names = {
+            'kg': 'кг',
+            'liters': 'л',
+            'grams': 'г',
+            'pieces': 'шт'
+        }
+
+        text = (
+            "✅ <b>Товар успешно создан!</b>\n\n"
+            f"📝 <b>{new_sku.name}</b>\n"
+            f"📏 Единица: {unit_names[unit_code]}\n"
+        )
+
+        await callback.message.edit_text(text)
+
+        # Показать категорию
+        category = await session.run_sync(
+            lambda sync_session: category_service.get_category(sync_session, category_id)
+        )
+
+        stats = await session.run_sync(
+            lambda sync_session: category_service.get_category_stats(sync_session, category_id)
+        )
+
+        category_text = (
+            f"📦 <b>{category.name}</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Товаров в категории: {stats['total_skus']}\n"
+            f"• Активных товаров: {stats['active_skus']}\n"
+        )
+
+        await callback.message.answer(category_text, reply_markup=get_category_view_keyboard(category_id))
+        await state.clear()
+
+    except Exception as e:
+        logger.error(f"Error creating SKU: {e}")
+        await callback.message.edit_text(
+            f"❌ Произошла ошибка при создании товара: {str(e)}",
+            reply_markup=get_cancel_keyboard()
+        )
 
 
 # ============================================================================
