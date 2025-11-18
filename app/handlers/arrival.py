@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database.models import SKUType, User, ApprovalStatus, Category, SKU as SKUModel
+from app.database.models import SKUType, User, ApprovalStatus, Category, SKU as SKUModel, Stock
 from app.services import warehouse_service, stock_service
 from app.utils.keyboards import (
     get_warehouses_keyboard,
@@ -320,12 +320,14 @@ async def select_sku(
             sku_unit=sku.unit.value  # Используем .value для получения строки из enum
         )
 
-        # Текущий остаток на складе
-        current_stock = await stock_service.get_stock_quantity(
-            session,
-            warehouse_id=warehouse_id,
-            sku_id=sku_id
+        # Текущий остаток на складе - прямой запрос к БД
+        stmt = select(Stock).where(
+            Stock.warehouse_id == warehouse_id,
+            Stock.sku_id == sku_id
         )
+        result = await session.execute(stmt)
+        stock = result.scalar_one_or_none()
+        current_stock = stock.quantity if stock else 0.0
 
         # Преобразуем UnitType в читаемый формат
         unit_display = get_unit_display(sku.unit.value)
