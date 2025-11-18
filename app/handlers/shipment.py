@@ -300,12 +300,12 @@ async def enter_shipment_date(message: Message, state: FSMContext) -> None:
     if user_input == '-':
         shipment_date = date.today()
     else:
-        # Парсинг даты
-        shipment_date = parse_date_input(user_input)
-        
-        if shipment_date is None:
+        # Парсинг даты - возвращает (bool, datetime, str)
+        is_valid, shipment_date, error = parse_date_input(user_input)
+
+        if not is_valid:
             await message.answer(
-                "❌ Некорректный формат даты.\n"
+                f"{error}\n"
                 "Используйте формат ДД.ММ.ГГГГ\n\n"
                 "Примеры: <code>15.12.2024</code>, <code>01.01.2025</code>\n\n"
                 "Попробуйте снова:",
@@ -356,18 +356,16 @@ async def enter_initial_notes(
     if user_input == '-':
         initial_notes = None
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=500)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, initial_notes, error = validate_text_length(user_input, max_length=500)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        initial_notes = user_input
     
     # Получаем данные из FSM
     data = await state.get_data()
@@ -559,28 +557,25 @@ async def enter_quantity(message: Message, state: FSMContext) -> None:
     Обрабатывает ввод количества продукции.
     """
     user_input = message.text.strip()
-    
-    # Парсинг количества
-    quantity = parse_decimal_input(user_input)
-    
-    if quantity is None:
+
+    # validate_positive_decimal уже включает парсинг и валидацию
+    # Возвращает (bool, float, str)
+    is_valid, quantity_float, error = validate_positive_decimal(
+        user_input,
+        min_value=0.001,
+        max_value=999999.0
+    )
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n\n"
+            f"{error}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
-    # Валидация положительности
-    validation = validate_positive_decimal(quantity, min_value=Decimal('0.001'))
-    
-    if not validation['valid']:
-        await message.answer(
-            f"❌ {validation['error']}\n\n"
-            "Попробуйте снова:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
+
+    # Преобразуем в Decimal для точности
+    quantity = Decimal(str(quantity_float))
     
     # Получаем данные
     data = await state.get_data()
@@ -630,17 +625,17 @@ async def enter_price(
     if user_input == '-':
         price = None
     else:
-        # Парсинг цены
-        price = parse_decimal_input(user_input)
-        
-        if price is None:
+        # Парсинг цены - возвращает (bool, float, str)
+        is_valid, price, error = parse_decimal_input(user_input)
+
+        if not is_valid:
             await message.answer(
-                "❌ Некорректный формат числа.\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова или отправьте '-' для пропуска:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
+
         # Проверка неотрицательности
         if price < 0:
             await message.answer(

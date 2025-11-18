@@ -249,29 +249,26 @@ async def enter_batch_size(
     Обрабатывает ввод размера замеса и проверяет наличие сырья.
     """
     user_input = message.text.strip()
-    
-    # Парсинг количества
-    batch_size = parse_decimal_input(user_input)
-    
-    if batch_size is None:
+
+    # validate_positive_decimal уже включает парсинг и валидацию
+    # Возвращает (bool, float, str)
+    is_valid, batch_size_float, error = validate_positive_decimal(
+        user_input,
+        min_value=0.1,
+        max_value=999999.0
+    )
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n\n"
+            f"{error}\n\n"
             "Примеры: <code>100</code>, <code>500</code>, <code>1000</code>\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
-    # Валидация положительности
-    validation = validate_positive_decimal(batch_size, min_value=Decimal('0.1'))
-    
-    if not validation['valid']:
-        await message.answer(
-            f"❌ {validation['error']}\n\n"
-            "Попробуйте снова:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
+
+    # Преобразуем в Decimal для точности
+    batch_size = Decimal(str(batch_size_float))
     
     # Получаем данные
     data = await state.get_data()
@@ -459,28 +456,25 @@ async def enter_actual_output(message: Message, state: FSMContext) -> None:
     Обрабатывает ввод фактического выхода полуфабриката.
     """
     user_input = message.text.strip()
-    
-    # Парсинг количества
-    actual_output = parse_decimal_input(user_input)
-    
-    if actual_output is None:
+
+    # validate_positive_decimal уже включает парсинг и валидацию
+    # Возвращает (bool, float, str)
+    is_valid, actual_output_float, error = validate_positive_decimal(
+        user_input,
+        min_value=0.1,
+        max_value=999999.0
+    )
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n\n"
+            f"{error}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
-    # Валидация
-    validation = validate_positive_decimal(actual_output, min_value=Decimal('0.1'))
-    
-    if not validation['valid']:
-        await message.answer(
-            f"❌ {validation['error']}\n\n"
-            "Попробуйте снова:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
+
+    # Преобразуем в Decimal для точности
+    actual_output = Decimal(str(actual_output_float))
     
     # Проверка разумности значения
     data = await state.get_data()
@@ -522,18 +516,18 @@ async def enter_waste_semi(message: Message, state: FSMContext) -> None:
     Обрабатывает ввод брака полуфабриката.
     """
     user_input = message.text.strip()
-    
-    # Парсинг количества
-    waste_semi = parse_decimal_input(user_input)
-    
-    if waste_semi is None:
+
+    # parse_decimal_input возвращает (bool, float, str)
+    is_valid, waste_semi, error = parse_decimal_input(user_input)
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n\n"
+            f"{error}\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
+
     # Валидация неотрицательности
     if waste_semi < 0:
         await message.answer(
@@ -585,18 +579,18 @@ async def enter_notes(message: Message, state: FSMContext) -> None:
     if user_input == '-':
         await state.update_data(notes=None)
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=500)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, validated_text, error = validate_text_length(user_input, max_length=500)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        await state.update_data(notes=user_input)
+
+        await state.update_data(notes=validated_text)
     
     # Формирование сводки
     data = await state.get_data()
