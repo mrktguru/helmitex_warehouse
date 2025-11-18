@@ -42,6 +42,21 @@ arrival_router = Router(name="arrival")
 
 
 # ============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================================================
+
+def get_unit_display(unit_value: str) -> str:
+    """Преобразует значение единицы измерения в читаемый формат."""
+    unit_map = {
+        'kg': 'кг',
+        'liters': 'л',
+        'grams': 'г',
+        'pieces': 'шт'
+    }
+    return unit_map.get(unit_value, unit_value)
+
+
+# ============================================================================
 # СОСТОЯНИЯ FSM
 # ============================================================================
 
@@ -281,38 +296,48 @@ async def select_sku(
     
     # Извлечение ID SKU
     sku_id = int(callback.data.split('_')[-1])
-    
+
     # Загрузка информации о SKU
     try:
-        sku = await stock_service.get_sku(session, sku_id)
-        
+        # Получение SKU напрямую из базы
+        stmt = select(SKUModel).where(SKUModel.id == sku_id)
+        result = await session.execute(stmt)
+        sku = result.scalar_one_or_none()
+
+        if not sku:
+            await callback.answer("❌ Товар не найден", show_alert=True)
+            return
+
         # Получаем данные из FSM
         data = await state.get_data()
         warehouse_id = data['warehouse_id']
         warehouse_name = data['warehouse_name']
-        
+
         # Сохранение выбора
         await state.update_data(
             sku_id=sku_id,
             sku_name=sku.name,
-            sku_unit=sku.unit
+            sku_unit=sku.unit.value  # Используем .value для получения строки из enum
         )
-        
+
         # Текущий остаток на складе
         current_stock = await stock_service.get_stock_quantity(
             session,
             warehouse_id=warehouse_id,
             sku_id=sku_id
         )
-        
+
+        # Преобразуем UnitType в читаемый формат
+        unit_display = get_unit_display(sku.unit.value)
+
         text = (
             f"📦 <b>Склад:</b> {warehouse_name}\n"
             f"📋 <b>Сырье:</b> {sku.name}\n"
-            f"📊 <b>Текущий остаток:</b> {current_stock} {sku.unit}\n\n"
-            f"📝 Введите количество для приемки ({sku.unit}):\n\n"
+            f"📊 <b>Текущий остаток:</b> {current_stock} {unit_display}\n\n"
+            f"📝 Введите количество для приемки ({unit_display}):\n\n"
             "<i>Примеры: 100, 50.5, 1000</i>"
         )
-        
+
         await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
         await state.set_state(ArrivalStates.enter_quantity)
         
@@ -365,15 +390,16 @@ async def enter_quantity(
     
     # Сохранение количества
     await state.update_data(quantity=str(quantity))
-    
+
     # Получаем единицу измерения
     data = await state.get_data()
     sku_unit = data['sku_unit']
-    
+    unit_display = get_unit_display(sku_unit)
+
     # Запрос цены
     text = (
-        f"✅ Количество: <b>{quantity} {sku_unit}</b>\n\n"
-        f"💰 Введите цену за {sku_unit} (необязательно):\n\n"
+        f"✅ Количество: <b>{quantity} {unit_display}</b>\n\n"
+        f"💰 Введите цену за {unit_display} (необязательно):\n\n"
         "<i>Примеры: 1500, 2450.50</i>\n"
         "<i>Или отправьте '-' для пропуска</i>"
     )
@@ -552,21 +578,23 @@ async def enter_notes(
     
     # Получаем все данные для подтверждения
     data = await state.get_data()
-    
+
     # Формирование сводки
     quantity = Decimal(data['quantity'])
+    unit_display = get_unit_display(data['sku_unit'])
+
     summary = (
         "📋 <b>Подтверждение приемки</b>\n\n"
         f"📦 <b>Склад:</b> {data['warehouse_name']}\n"
         f"📋 <b>Сырье:</b> {data['sku_name']}\n"
-        f"📊 <b>Количество:</b> {quantity} {data['sku_unit']}\n"
+        f"📊 <b>Количество:</b> {quantity} {unit_display}\n"
     )
-    
+
     if data.get('price_per_unit'):
         price = Decimal(data['price_per_unit'])
         total_cost = quantity * price
         summary += (
-            f"💰 <b>Цена за {data['sku_unit']}:</b> {price} ₽\n"
+            f"💰 <b>Цена за {unit_display}:</b> {price} ₽\n"
             f"💵 <b>Общая стоимость:</b> {total_cost} ₽\n"
         )
     
@@ -632,12 +660,13 @@ async def confirm_arrival(
         )
         
         # Успешное завершение
+        unit_display = get_unit_display(data['sku_unit'])
         success_text = (
             "✅ <b>Приемка успешно выполнена!</b>\n\n"
             f"📦 <b>Склад:</b> {data['warehouse_name']}\n"
             f"📋 <b>Сырье:</b> {data['sku_name']}\n"
-            f"📊 <b>Принято:</b> {quantity} {data['sku_unit']}\n"
-            f"📈 <b>Новый остаток:</b> {stock.quantity} {data['sku_unit']}\n\n"
+            f"📊 <b>Принято:</b> {quantity} {unit_display}\n"
+            f"📈 <b>Новый остаток:</b> {stock.quantity} {unit_display}\n\n"
             f"🆔 <b>ID движения:</b> {movement.id}"
         )
         
