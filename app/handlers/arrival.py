@@ -18,11 +18,12 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database.models import SKUType, User, ApprovalStatus
+from app.database.models import SKUType, User, ApprovalStatus, Category, SKU as SKUModel
 from app.services import warehouse_service, stock_service
 from app.utils.keyboards import (
     get_warehouses_keyboard,
     get_sku_keyboard,
+    get_categories_keyboard,
     get_confirmation_keyboard,
     get_cancel_keyboard,
     get_main_menu_keyboard
@@ -46,6 +47,7 @@ arrival_router = Router(name="arrival")
 
 class ArrivalStates(StatesGroup):
     """Состояния диалога приемки сырья."""
+    select_category = State()
     select_sku = State()
     enter_quantity = State()
     enter_price = State()
@@ -118,14 +120,33 @@ async def start_arrival(
             )
             return
 
-        # Получение списка сырья
-        skus = await stock_service.get_skus_by_type(
-            session,
-            type=SKUType.raw,
-            active_only=True
-        )
+        # Получение списка категорий с сырьем
+        stmt = select(Category).order_by(Category.sort_order, Category.name)
+        result = await session.execute(stmt)
+        categories = result.scalars().all()
 
-        if not skus:
+        if not categories:
+            await message.answer(
+                "❌ В системе нет категорий сырья.\n"
+                "Обратитесь к администратору для добавления категорий.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+
+        # Получение количества сырья в каждой категории
+        from sqlalchemy import func
+        stmt = select(SKUModel.category_id, func.count(SKUModel.id)).where(
+            SKUModel.category_id.in_([c.id for c in categories]),
+            SKUModel.type == SKUType.raw,
+            SKUModel.is_active == True
+        ).group_by(SKUModel.category_id)
+        result = await session.execute(stmt)
+        stats_dict = {category_id: count for category_id, count in result.all()}
+
+        # Фильтруем категории, оставляем только те, где есть сырье
+        categories_with_raw = [c for c in categories if c.id in stats_dict and stats_dict[c.id] > 0]
+
+        if not categories_with_raw:
             await message.answer(
                 "❌ В системе нет сырья для приемки.\n"
                 "Обратитесь к администратору для добавления номенклатуры.",
@@ -141,16 +162,17 @@ async def start_arrival(
             started_at=datetime.utcnow().isoformat()
         )
 
-        # Клавиатура выбора сырья
-        keyboard = get_sku_keyboard(
-            skus,
-            prefix='arrival_sku'
+        # Клавиатура выбора категории
+        keyboard = get_categories_keyboard(
+            categories_with_raw,
+            stats_dict=stats_dict,
+            prefix='arrival_category'
         )
 
         text = (
             "📦 <b>Приемка сырья на склад</b>\n\n"
             f"🏭 <b>Склад:</b> {warehouse.name}\n\n"
-            "📋 Выберите принимаемое сырье:"
+            "📂 Выберите категорию сырья:"
         )
 
         if isinstance(update, CallbackQuery):
@@ -158,7 +180,7 @@ async def start_arrival(
         else:
             await message.answer(text, reply_markup=keyboard)
 
-        await state.set_state(ArrivalStates.select_sku)
+        await state.set_state(ArrivalStates.select_category)
 
     except Exception as e:
         logger.error(f"Error in start_arrival: {e}", exc_info=True)
@@ -166,6 +188,77 @@ async def start_arrival(
             f"❌ Ошибка при загрузке данных: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
+
+
+# ============================================================================
+# ВЫБОР КАТЕГОРИИ
+# ============================================================================
+
+@arrival_router.callback_query(
+    StateFilter(ArrivalStates.select_category),
+    F.data.startswith("arrival_category_")
+)
+async def select_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """
+    Обрабатывает выбор категории и показывает сырье из неё.
+    """
+    await callback.answer()
+
+    # Извлечение ID категории
+    category_id = int(callback.data.split('_')[-1])
+
+    # Получение категории
+    stmt = select(Category).where(Category.id == category_id)
+    result = await session.execute(stmt)
+    category = result.scalar_one_or_none()
+
+    if not category:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    # Получение сырья из этой категории
+    stmt = select(SKUModel).where(
+        SKUModel.category_id == category_id,
+        SKUModel.type == SKUType.raw,
+        SKUModel.is_active == True
+    ).order_by(SKUModel.name)
+    result = await session.execute(stmt)
+    skus = result.scalars().all()
+
+    if not skus:
+        await callback.answer(
+            f"❌ В категории '{category.name}' нет активного сырья",
+            show_alert=True
+        )
+        return
+
+    # Сохранение ID категории
+    await state.update_data(category_id=category_id, category_name=category.name)
+
+    # Получаем данные из FSM
+    data = await state.get_data()
+    warehouse_name = data['warehouse_name']
+
+    # Клавиатура выбора сырья (кнопка "Назад" возвращает к выбору категорий)
+    keyboard = get_sku_keyboard(
+        skus,
+        prefix='arrival_sku',
+        back_callback='arrival_back_to_categories'
+    )
+
+    text = (
+        "📦 <b>Приемка сырья на склад</b>\n\n"
+        f"🏭 <b>Склад:</b> {warehouse_name}\n"
+        f"📂 <b>Категория:</b> {category.name}\n\n"
+        "📋 Выберите принимаемое сырье:"
+    )
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await state.set_state(ArrivalStates.select_sku)
 
 
 # ============================================================================
@@ -566,6 +659,63 @@ async def confirm_arrival(
         )
         
         await state.clear()
+
+
+# ============================================================================
+# ВОЗВРАТ К КАТЕГОРИЯМ
+# ============================================================================
+
+@arrival_router.callback_query(
+    F.data == "arrival_back_to_categories",
+    StateFilter(ArrivalStates.select_sku)
+)
+async def back_to_categories(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession
+) -> None:
+    """
+    Возврат к выбору категорий сырья.
+    """
+    await callback.answer()
+
+    # Получение данных из FSM
+    data = await state.get_data()
+    warehouse_name = data['warehouse_name']
+
+    # Получение списка категорий с сырьем
+    stmt = select(Category).order_by(Category.sort_order, Category.name)
+    result = await session.execute(stmt)
+    categories = result.scalars().all()
+
+    # Получение количества сырья в каждой категории
+    from sqlalchemy import func
+    stmt = select(SKUModel.category_id, func.count(SKUModel.id)).where(
+        SKUModel.category_id.in_([c.id for c in categories]),
+        SKUModel.type == SKUType.raw,
+        SKUModel.is_active == True
+    ).group_by(SKUModel.category_id)
+    result = await session.execute(stmt)
+    stats_dict = {category_id: count for category_id, count in result.all()}
+
+    # Фильтруем категории, оставляем только те, где есть сырье
+    categories_with_raw = [c for c in categories if c.id in stats_dict and stats_dict[c.id] > 0]
+
+    # Клавиатура выбора категории
+    keyboard = get_categories_keyboard(
+        categories_with_raw,
+        stats_dict=stats_dict,
+        prefix='arrival_category'
+    )
+
+    text = (
+        "📦 <b>Приемка сырья на склад</b>\n\n"
+        f"🏭 <b>Склад:</b> {warehouse_name}\n\n"
+        "📂 Выберите категорию сырья:"
+    )
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await state.set_state(ArrivalStates.select_category)
 
 
 # ============================================================================
