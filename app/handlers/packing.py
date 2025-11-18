@@ -180,7 +180,7 @@ async def start_packing(
 
 @packing_router.callback_query(
     StateFilter(PackingStates.select_semi_sku),
-    F.data.startswith("pack_sku_")
+    F.data.startswith("pack_semi_")
 )
 async def select_semi_sku(
     callback: CallbackQuery,
@@ -329,25 +329,23 @@ async def enter_units_count(
     Обрабатывает ввод количества единиц для фасовки.
     """
     user_input = message.text.strip()
-    
-    # Парсинг целого числа
-    units_count = parse_integer_input(user_input)
-    
-    if units_count is None:
+
+    # parse_integer_input возвращает (bool, int, str)
+    is_valid, units_count, error = parse_integer_input(user_input)
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n"
+            f"{error}\n"
             "Введите целое положительное число.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
-    # Валидация положительности
-    validation = validate_positive_integer(units_count, min_value=1)
-    
-    if not validation['valid']:
+
+    # Дополнительная валидация положительности
+    if units_count < 1:
         await message.answer(
-            f"❌ {validation['error']}\n\n"
+            "❌ Количество должно быть не менее 1\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
@@ -472,19 +470,19 @@ async def enter_waste_container(message: Message, state: FSMContext) -> None:
     Обрабатывает ввод брака тары.
     """
     user_input = message.text.strip()
-    
-    # Парсинг целого числа
-    waste_container = parse_integer_input(user_input)
-    
-    if waste_container is None:
+
+    # parse_integer_input возвращает (bool, int, str)
+    is_valid, waste_container, error = parse_integer_input(user_input)
+
+    if not is_valid:
         await message.answer(
-            "❌ Некорректный формат числа.\n"
+            f"{error}\n"
             "Введите целое неотрицательное число.\n\n"
             "Попробуйте снова:",
             reply_markup=get_cancel_keyboard()
         )
         return
-    
+
     # Валидация неотрицательности
     if waste_container < 0:
         await message.answer(
@@ -537,18 +535,18 @@ async def enter_notes(message: Message, state: FSMContext) -> None:
     if user_input == '-':
         await state.update_data(notes=None)
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=500)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, validated_text, error = validate_text_length(user_input, max_length=500)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        await state.update_data(notes=user_input)
+
+        await state.update_data(notes=validated_text)
     
     # Формирование сводки
     data = await state.get_data()

@@ -455,19 +455,19 @@ async def enter_price(
     if user_input == '-':
         await state.update_data(price_per_unit=None)
     else:
-        # Парсинг цены
-        price = parse_decimal_input(user_input)
-        
-        if price is None:
+        # Парсинг цены - возвращает (bool, float, str)
+        is_valid, price, error = parse_decimal_input(user_input)
+
+        if not is_valid:
             await message.answer(
-                "❌ Некорректный формат числа.\n\n"
+                f"{error}\n\n"
                 "Примеры: <code>1500</code>, <code>2450.50</code>\n"
                 "Или отправьте <code>-</code> для пропуска\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
+
         # Проверка неотрицательности
         if price < 0:
             await message.answer(
@@ -476,7 +476,7 @@ async def enter_price(
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
+
         await state.update_data(price_per_unit=str(price))
     
     # Запрос поставщика
@@ -508,18 +508,18 @@ async def enter_supplier(
     if user_input == '-':
         await state.update_data(supplier=None)
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=200)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, validated_text, error = validate_text_length(user_input, max_length=200)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        await state.update_data(supplier=user_input)
+
+        await state.update_data(supplier=validated_text)
     
     # Запрос номера документа
     text = (
@@ -550,18 +550,18 @@ async def enter_document(
     if user_input == '-':
         await state.update_data(document_number=None)
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=100)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, validated_text, error = validate_text_length(user_input, max_length=100)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        await state.update_data(document_number=user_input)
+
+        await state.update_data(document_number=validated_text)
     
     # Запрос примечаний
     text = (
@@ -592,18 +592,18 @@ async def enter_notes(
     if user_input == '-':
         await state.update_data(notes=None)
     else:
-        # Валидация длины
-        validation = validate_text_length(user_input, max_length=500)
-        
-        if not validation['valid']:
+        # Валидация длины - возвращает (bool, str, str)
+        is_valid, validated_text, error = validate_text_length(user_input, max_length=500)
+
+        if not is_valid:
             await message.answer(
-                f"❌ {validation['error']}\n\n"
+                f"{error}\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
-        
-        await state.update_data(notes=user_input)
+
+        await state.update_data(notes=validated_text)
     
     # Получаем все данные для подтверждения
     data = await state.get_data()
