@@ -44,7 +44,6 @@ class CategoryStates(StatesGroup):
     # Состояния для создания товара в категории
     sku_create_name = State()
     sku_create_unit = State()
-    sku_create_min_stock = State()
 
 
 # ============================================================================
@@ -902,63 +901,16 @@ async def create_sku_unit(
     state: FSMContext,
     session: AsyncSession
 ) -> None:
-    """Получение единицы измерения."""
+    """Получение единицы измерения и создание товара."""
     await callback.answer()
 
     # Извлечение единицы измерения
     unit_code = callback.data.split('_')[2]  # kg, liters, grams, pieces
 
-    # Сохранение единицы измерения
-    await state.update_data(sku_unit=unit_code)
-
-    data = await state.get_data()
-    category_id = data['category_id']
-    category = await session.run_sync(
-        lambda sync_session: category_service.get_category(sync_session, category_id)
-    )
-
-    unit_names = {
-        'kg': 'кг',
-        'liters': 'л',
-        'grams': 'г',
-        'pieces': 'шт'
-    }
-
-    text = (
-        f"➕ <b>Создание товара</b>\n\n"
-        f"📦 Категория: <b>{category.name}</b>\n"
-        f"📝 Название: <b>{data['sku_name']}</b>\n"
-        f"📏 Единица: <b>{unit_names[unit_code]}</b>\n\n"
-        "Введите минимальный остаток (число, например 10):"
-    )
-
-    await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(CategoryStates.sku_create_min_stock)
-
-
-@categories_router.message(CategoryStates.sku_create_min_stock)
-async def create_sku_min_stock(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """Получение минимального остатка и создание товара."""
-    try:
-        min_stock = float(message.text.strip())
-        if min_stock < 0:
-            raise ValueError("Минимальный остаток не может быть отрицательным")
-    except ValueError:
-        await message.answer(
-            "❌ Введите корректное число (например, 10 или 5.5):",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
     # Получение данных из состояния
     data = await state.get_data()
     category_id = data['category_id']
     sku_name = data['sku_name']
-    sku_unit = data['sku_unit']
 
     # Автоматическая генерация кода из названия товара
     import re
@@ -1010,8 +962,8 @@ async def create_sku_min_stock(
             name=sku_name,
             type=SKUType.raw,
             category_id=category_id,
-            unit=UnitType[sku_unit],
-            min_stock=min_stock,
+            unit=UnitType[unit_code],
+            min_stock=0,  # По умолчанию 0
             is_active=True
         )
 
@@ -1029,11 +981,10 @@ async def create_sku_min_stock(
         text = (
             "✅ <b>Товар успешно создан!</b>\n\n"
             f"📝 <b>{new_sku.name}</b>\n"
-            f"📏 Единица: {unit_names[sku_unit]}\n"
-            f"📊 Минимальный остаток: {min_stock}\n"
+            f"📏 Единица: {unit_names[unit_code]}\n"
         )
 
-        await message.answer(text)
+        await callback.message.edit_text(text)
 
         # Показать категорию
         category = await session.run_sync(
@@ -1051,12 +1002,12 @@ async def create_sku_min_stock(
             f"• Активных товаров: {stats['active_skus']}\n"
         )
 
-        await message.answer(category_text, reply_markup=get_category_view_keyboard(category_id))
+        await callback.message.answer(category_text, reply_markup=get_category_view_keyboard(category_id))
         await state.clear()
 
     except Exception as e:
         logger.error(f"Error creating SKU: {e}")
-        await message.answer(
+        await callback.message.edit_text(
             f"❌ Произошла ошибка при создании товара: {str(e)}",
             reply_markup=get_cancel_keyboard()
         )
