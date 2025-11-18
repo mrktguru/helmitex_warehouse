@@ -340,8 +340,11 @@ async def select_sku(
             "<i>Примеры: 100, 50.5, 1000</i>"
         )
 
+        logger.info(f"Sending quantity input prompt for SKU {sku.name}")
         await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
+        logger.info(f"Setting state to enter_quantity")
         await state.set_state(ArrivalStates.enter_quantity)
+        logger.info(f"State set successfully. Current state data: {await state.get_data()}")
         
     except Exception as e:
         logger.error(f"Error in select_sku: {e}", exc_info=True)
@@ -364,50 +367,80 @@ async def enter_quantity(
     """
     Обрабатывает ввод количества.
     """
-    user_input = message.text.strip()
-    
-    # Парсинг и валидация числа
-    quantity = parse_decimal_input(user_input)
-    
-    if quantity is None:
+    try:
+        logger.info(f"enter_quantity handler called with text: {message.text}")
+        user_input = message.text.strip()
+        logger.info(f"Stripped input: {user_input}")
+
+        # Парсинг и валидация числа
+        quantity = parse_decimal_input(user_input)
+        logger.info(f"Parsed quantity: {quantity}")
+
+        if quantity is None:
+            logger.warning(f"Failed to parse quantity from input: {user_input}")
+            await message.answer(
+                "❌ Некорректный формат числа.\n"
+                "Используйте точку или запятую в качестве разделителя.\n\n"
+                "Примеры: <code>100</code>, <code>50.5</code>, <code>1000</code>\n\n"
+                "Попробуйте снова:",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+
+        # Проверка положительности
+        validation = validate_positive_decimal(quantity, min_value=Decimal('0.001'))
+        logger.info(f"Validation result: {validation}")
+
+        if not validation['valid']:
+            logger.warning(f"Validation failed: {validation['error']}")
+            await message.answer(
+                f"❌ {validation['error']}\n\n"
+                "Попробуйте снова:",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+
+        # Сохранение количества
+        await state.update_data(quantity=str(quantity))
+        logger.info(f"Quantity saved to state: {quantity}")
+
+        # Получаем единицу измерения
+        data = await state.get_data()
+        sku_unit = data.get('sku_unit')
+        logger.info(f"Retrieved sku_unit from state: {sku_unit}")
+
+        if not sku_unit:
+            logger.error("sku_unit not found in state data!")
+            await message.answer(
+                "❌ Ошибка: данные о единице измерения не найдены.\n"
+                "Пожалуйста, начните процесс заново.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            await state.clear()
+            return
+
+        unit_display = get_unit_display(sku_unit)
+
+        # Запрос цены
+        text = (
+            f"✅ Количество: <b>{quantity} {unit_display}</b>\n\n"
+            f"💰 Введите цену за {unit_display} (необязательно):\n\n"
+            "<i>Примеры: 1500, 2450.50</i>\n"
+            "<i>Или отправьте '-' для пропуска</i>"
+        )
+
+        logger.info("Sending price request message")
+        await message.answer(text, reply_markup=get_cancel_keyboard())
+        await state.set_state(ArrivalStates.enter_price)
+        logger.info("State set to enter_price")
+
+    except Exception as e:
+        logger.error(f"Error in enter_quantity: {e}", exc_info=True)
         await message.answer(
-            "❌ Некорректный формат числа.\n"
-            "Используйте точку или запятую в качестве разделителя.\n\n"
-            "Примеры: <code>100</code>, <code>50.5</code>, <code>1000</code>\n\n"
-            "Попробуйте снова:",
+            f"❌ Произошла ошибка при обработке количества: {str(e)}\n\n"
+            "Попробуйте снова или используйте кнопку Отмена.",
             reply_markup=get_cancel_keyboard()
         )
-        return
-    
-    # Проверка положительности
-    validation = validate_positive_decimal(quantity, min_value=Decimal('0.001'))
-    
-    if not validation['valid']:
-        await message.answer(
-            f"❌ {validation['error']}\n\n"
-            "Попробуйте снова:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-    
-    # Сохранение количества
-    await state.update_data(quantity=str(quantity))
-
-    # Получаем единицу измерения
-    data = await state.get_data()
-    sku_unit = data['sku_unit']
-    unit_display = get_unit_display(sku_unit)
-
-    # Запрос цены
-    text = (
-        f"✅ Количество: <b>{quantity} {unit_display}</b>\n\n"
-        f"💰 Введите цену за {unit_display} (необязательно):\n\n"
-        "<i>Примеры: 1500, 2450.50</i>\n"
-        "<i>Или отправьте '-' для пропуска</i>"
-    )
-    
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(ArrivalStates.enter_price)
 
 
 # ============================================================================
