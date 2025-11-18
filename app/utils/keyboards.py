@@ -1,46 +1,48 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Optional
 from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard, Recipient
 
 
-def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+def get_main_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     """
     Создает главное меню бота.
-    
+
     Args:
         is_admin: Флаг администратора для отображения дополнительных кнопок
-        
+
     Returns:
-        ReplyKeyboardMarkup: Клавиатура главного меню
+        InlineKeyboardMarkup: Inline клавиатура главного меню
     """
-    builder = ReplyKeyboardBuilder()
-    
+    builder = InlineKeyboardBuilder()
+
     # Основные кнопки для всех пользователей
     builder.row(
-        KeyboardButton(text="📊 Остатки"),
-        KeyboardButton(text="📦 Движения")
+        InlineKeyboardButton(text="📊 Остатки", callback_data="menu_stock"),
+        InlineKeyboardButton(text="📦 Движения", callback_data="menu_movements")
     )
     builder.row(
-        KeyboardButton(text="🏭 Производство"),
-        KeyboardButton(text="📋 Заказы")
+        InlineKeyboardButton(text="📥 Приемка сырья", callback_data="arrival_start")
     )
     builder.row(
-        KeyboardButton(text="🚚 Отгрузки"),
-        KeyboardButton(text="📦 Фасовка")
+        InlineKeyboardButton(text="🏭 Производство", callback_data="menu_production"),
+        InlineKeyboardButton(text="📦 Фасовка", callback_data="menu_packing")
     )
-    
+    builder.row(
+        InlineKeyboardButton(text="🚚 Отгрузки", callback_data="menu_shipment")
+    )
+
     # Дополнительные кнопки для администраторов
     if is_admin:
         builder.row(
-            KeyboardButton(text="⚙️ Управление"),
-            KeyboardButton(text="📚 Справочники")
+            InlineKeyboardButton(text="⚙️ Управление", callback_data="menu_management"),
+            InlineKeyboardButton(text="📚 Справочники", callback_data="menu_references")
         )
         builder.row(
-            KeyboardButton(text="📈 Отчеты")
+            InlineKeyboardButton(text="📈 Отчеты", callback_data="menu_reports")
         )
 
-    return builder.as_markup(resize_keyboard=True)
+    return builder.as_markup()
 
 
 def get_warehouses_keyboard(warehouses: List[Warehouse]) -> InlineKeyboardMarkup:
@@ -180,43 +182,63 @@ def get_recipients_keyboard(
     return builder.as_markup()
 
 
-def get_confirmation_keyboard(action: str, item_id: int) -> InlineKeyboardMarkup:
+def get_confirmation_keyboard(
+    action: str = None,
+    item_id: int = None,
+    confirm_callback: str = None,
+    cancel_callback: str = None
+) -> InlineKeyboardMarkup:
     """
     Создает клавиатуру подтверждения действия.
-    
+
     Args:
-        action: Действие для подтверждения
-        item_id: ID объекта
-        
+        action: Действие для подтверждения (используется с item_id)
+        item_id: ID объекта (используется с action)
+        confirm_callback: Кастомный callback для подтверждения
+        cancel_callback: Кастомный callback для отмены
+
     Returns:
         InlineKeyboardMarkup: Клавиатура подтверждения
     """
     builder = InlineKeyboardBuilder()
-    
+
+    # Если заданы кастомные callbacks, используем их
+    if confirm_callback and cancel_callback:
+        confirm_data = confirm_callback
+        cancel_data = cancel_callback
+    # Иначе используем action и item_id
+    elif action is not None and item_id is not None:
+        confirm_data = f"confirm_{action}_{item_id}"
+        cancel_data = f"cancel_{action}_{item_id}"
+    else:
+        # Дефолтные значения
+        confirm_data = "confirm"
+        cancel_data = "cancel"
+
     builder.row(
         InlineKeyboardButton(
             text="✅ Подтвердить",
-            callback_data=f"confirm_{action}_{item_id}"
+            callback_data=confirm_data
         ),
         InlineKeyboardButton(
             text="❌ Отменить",
-            callback_data=f"cancel_{action}_{item_id}"
+            callback_data=cancel_data
         )
     )
-    
+
     return builder.as_markup()
 
 
-def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+def get_cancel_keyboard() -> InlineKeyboardMarkup:
     """
-    Создает клавиатуру с кнопкой отмены.
-    
+    Создает inline клавиатуру с кнопкой отмены.
+
     Returns:
-        ReplyKeyboardMarkup: Клавиатура с кнопкой "Отмена"
+        InlineKeyboardMarkup: Inline клавиатура с кнопкой "Отмена"
     """
-    builder = ReplyKeyboardBuilder()
-    builder.row(KeyboardButton(text="❌ Отмена"))
-    return builder.as_markup(resize_keyboard=True)
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return builder.as_markup()
 
 
 def get_movement_type_keyboard() -> InlineKeyboardMarkup:

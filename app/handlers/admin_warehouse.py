@@ -949,8 +949,7 @@ async def create_recipe_name(message: Message, state: FSMContext, session: Async
         # Клавиатура выбора полуфабриката
         keyboard = get_sku_keyboard(
             semi_skus,
-            callback_prefix='recipe_semi',
-            show_stock=False
+            prefix='recipe_semi'
         )
         
         text = (
@@ -1629,8 +1628,7 @@ async def create_variant_start(query: CallbackQuery, state: FSMContext, session:
         # Клавиатура выбора полуфабриката
         keyboard = get_sku_keyboard(
             semi_skus,
-            callback_prefix='pv_semi',
-            show_stock=False
+            prefix='pv_semi'
         )
         
         text = (
@@ -1693,8 +1691,7 @@ async def create_variant_semi(query: CallbackQuery, state: FSMContext, session: 
         # Клавиатура выбора готовой продукции
         keyboard = get_sku_keyboard(
             finished_skus,
-            callback_prefix='pv_finished',
-            show_stock=False
+            prefix='pv_finished'
         )
         
         text = (

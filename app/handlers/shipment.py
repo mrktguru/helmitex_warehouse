@@ -449,9 +449,7 @@ async def show_add_item_menu(
         # Клавиатура выбора SKU
         keyboard = get_sku_keyboard(
             finished_skus,
-            callback_prefix='ship_sku',
-            show_stock=True,
-            warehouse_id=warehouse_id
+            prefix='ship_sku'
         )
         
         # Текущие позиции отгрузки
