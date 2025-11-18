@@ -419,24 +419,6 @@ async def edit_category_menu(
             await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
             await state.set_state(CategoryStates.edit_name)
 
-        elif field == 'code':
-            text = (
-                f"✏️ <b>Редактирование кода</b>\n\n"
-                f"Текущее значение: <b>{category.code or '—'}</b>\n\n"
-                "Введите новый код (латинскими буквами, без пробелов):"
-            )
-            await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
-            await state.set_state(CategoryStates.edit_code)
-
-        elif field == 'desc':
-            text = (
-                f"✏️ <b>Редактирование описания</b>\n\n"
-                f"Текущее значение: <b>{category.description or '—'}</b>\n\n"
-                "Введите новое описание (или отправьте '-' чтобы удалить):"
-            )
-            await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
-            await state.set_state(CategoryStates.edit_description)
-
         elif field == 'sort':
             text = (
                 f"✏️ <b>Редактирование порядка сортировки</b>\n\n"
@@ -480,9 +462,6 @@ async def edit_category_name(
         text = (
             f"✅ Название обновлено!\n\n"
             f"📦 <b>{category.name}</b>\n"
-            f"🔤 Код: {category.code or '—'}\n"
-            f"📝 Описание: {category.description or '—'}\n"
-            f"🔢 Порядок сортировки: {category.sort_order}\n"
         )
 
         await message.answer(text, reply_markup=get_category_view_keyboard(category_id))
@@ -490,113 +469,6 @@ async def edit_category_name(
 
     except Exception as e:
         logger.error(f"Error updating category name: {e}")
-        await message.answer(
-            f"❌ Произошла ошибка при обновлении: {str(e)}",
-            reply_markup=get_cancel_keyboard()
-        )
-
-
-@categories_router.message(CategoryStates.edit_code)
-async def edit_category_code(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """Обновление кода категории."""
-    code = message.text.strip().lower()
-
-    if not code or len(code) < 2:
-        await message.answer(
-            "❌ Код должен содержать минимум 2 символа. Попробуйте ещё раз:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
-    if not code.isalnum() or not code.isascii():
-        await message.answer(
-            "❌ Код должен содержать только латинские буквы и цифры без пробелов. Попробуйте ещё раз:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
-    data = await state.get_data()
-    category_id = data['category_id']
-
-    try:
-        # Обновление категории
-        category = await session.run_sync(
-            lambda sync_session: category_service.update_category(
-                sync_session,
-                category_id,
-                code=code
-            )
-        )
-        await session.commit()
-
-        text = (
-            f"✅ Код обновлен!\n\n"
-            f"📦 <b>{category.name}</b>\n"
-            f"🔤 Код: {category.code}\n"
-            f"📝 Описание: {category.description or '—'}\n"
-            f"🔢 Порядок сортировки: {category.sort_order}\n"
-        )
-
-        await message.answer(text, reply_markup=get_category_view_keyboard(category_id))
-        await state.clear()
-
-    except ValueError as e:
-        await message.answer(
-            f"❌ Ошибка при обновлении кода: {str(e)}\n\n"
-            "Попробуйте ещё раз с другим кодом:",
-            reply_markup=get_cancel_keyboard()
-        )
-    except Exception as e:
-        logger.error(f"Error updating category code: {e}")
-        await message.answer(
-            f"❌ Произошла ошибка при обновлении: {str(e)}",
-            reply_markup=get_cancel_keyboard()
-        )
-
-
-@categories_router.message(CategoryStates.edit_description)
-async def edit_category_description(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession
-) -> None:
-    """Обновление описания категории."""
-    description = message.text.strip()
-
-    if description == '-':
-        description = None
-
-    data = await state.get_data()
-    category_id = data['category_id']
-
-    try:
-        # Обновление категории
-        category = await session.run_sync(
-            lambda sync_session: category_service.update_category(
-                sync_session,
-                category_id,
-                description=description
-            )
-        )
-        await session.commit()
-
-        text = (
-            f"✅ Описание обновлено!\n\n"
-            f"📦 <b>{category.name}</b>\n"
-            f"🔤 Код: {category.code or '—'}\n"
-            f"📝 Описание: {category.description or '—'}\n"
-            f"🔢 Порядок сортировки: {category.sort_order}\n"
-        )
-
-        await message.answer(text, reply_markup=get_category_view_keyboard(category_id))
-        await state.clear()
-
-    except Exception as e:
-        logger.error(f"Error updating category description: {e}")
         await message.answer(
             f"❌ Произошла ошибка при обновлении: {str(e)}",
             reply_markup=get_cancel_keyboard()
@@ -636,8 +508,6 @@ async def edit_category_sort_order(
         text = (
             f"✅ Порядок сортировки обновлен!\n\n"
             f"📦 <b>{category.name}</b>\n"
-            f"🔤 Код: {category.code or '—'}\n"
-            f"📝 Описание: {category.description or '—'}\n"
             f"🔢 Порядок сортировки: {category.sort_order}\n"
         )
 
@@ -694,8 +564,7 @@ async def delete_category(
 
         text = (
             f"🗑 <b>Удаление категории</b>\n\n"
-            f"📦 {category.name}\n"
-            f"🔤 Код: {category.code or '—'}\n\n"
+            f"📦 {category.name}\n\n"
             "⚠️ Вы уверены, что хотите удалить эту категорию?"
         )
 
