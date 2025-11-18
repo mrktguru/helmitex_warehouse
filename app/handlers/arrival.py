@@ -372,33 +372,27 @@ async def enter_quantity(
         user_input = message.text.strip()
         logger.info(f"Stripped input: {user_input}")
 
-        # Парсинг и валидация числа
-        quantity = parse_decimal_input(user_input)
-        logger.info(f"Parsed quantity: {quantity}")
+        # validate_positive_decimal уже включает парсинг и валидацию
+        # Возвращает (bool, float, str)
+        is_valid, quantity_float, error_msg = validate_positive_decimal(
+            user_input,
+            min_value=0.001,
+            max_value=999999.0
+        )
+        logger.info(f"Validation result - valid: {is_valid}, value: {quantity_float}, error: {error_msg}")
 
-        if quantity is None:
-            logger.warning(f"Failed to parse quantity from input: {user_input}")
+        if not is_valid:
+            logger.warning(f"Validation failed: {error_msg}")
             await message.answer(
-                "❌ Некорректный формат числа.\n"
-                "Используйте точку или запятую в качестве разделителя.\n\n"
+                f"{error_msg}\n\n"
                 "Примеры: <code>100</code>, <code>50.5</code>, <code>1000</code>\n\n"
                 "Попробуйте снова:",
                 reply_markup=get_cancel_keyboard()
             )
             return
 
-        # Проверка положительности
-        validation = validate_positive_decimal(quantity, min_value=Decimal('0.001'))
-        logger.info(f"Validation result: {validation}")
-
-        if not validation['valid']:
-            logger.warning(f"Validation failed: {validation['error']}")
-            await message.answer(
-                f"❌ {validation['error']}\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
+        # Преобразуем в Decimal для точности
+        quantity = Decimal(str(quantity_float))
 
         # Сохранение количества
         await state.update_data(quantity=str(quantity))
