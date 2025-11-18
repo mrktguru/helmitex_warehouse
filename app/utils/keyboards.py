@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from typing import List, Optional
-from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard, Recipient
+from typing import List, Optional, Dict
+from app.database.models import Warehouse, SKU, Barrel, PackingVariant, TechnologicalCard, Recipient, Category
 
 
 def get_main_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -72,31 +72,77 @@ def get_warehouses_keyboard(warehouses: List[Warehouse]) -> InlineKeyboardMarkup
     return builder.as_markup()
 
 
-def get_sku_keyboard(skus: List[SKU], prefix: str = "sku") -> InlineKeyboardMarkup:
+def get_sku_keyboard(
+    skus: List[SKU],
+    prefix: str = "sku",
+    back_callback: str = "back_to_menu"
+) -> InlineKeyboardMarkup:
     """
     Создает inline-клавиатуру со списком SKU.
-    
+
     Args:
         skus: Список объектов SKU
         prefix: Префикс для callback_data
-        
+        back_callback: Callback для кнопки "Назад"
+
     Returns:
         InlineKeyboardMarkup: Клавиатура с SKU
     """
     builder = InlineKeyboardBuilder()
-    
+
     for sku in skus:
+        # Показываем только название без unit
         builder.row(
             InlineKeyboardButton(
-                text=f"{sku.name} ({sku.unit})",
+                text=sku.name,
                 callback_data=f"{prefix}_{sku.id}"
             )
         )
-    
+
+    builder.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback)
+    )
+
+    return builder.as_markup()
+
+
+def get_categories_keyboard(
+    categories: List[Category],
+    stats_dict: Optional[Dict[int, int]] = None,
+    prefix: str = "category"
+) -> InlineKeyboardMarkup:
+    """
+    Создает inline-клавиатуру со списком категорий.
+
+    Args:
+        categories: Список объектов Category
+        stats_dict: Словарь {category_id: количество_товаров}
+        prefix: Префикс для callback_data
+
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с категориями
+    """
+    builder = InlineKeyboardBuilder()
+
+    for category in categories:
+        # Показываем количество товаров в категории
+        if stats_dict and category.id in stats_dict:
+            count = stats_dict[category.id]
+            text = f"{category.name} ({count})"
+        else:
+            text = f"{category.name} (0)"
+
+        builder.row(
+            InlineKeyboardButton(
+                text=text,
+                callback_data=f"{prefix}_{category.id}"
+            )
+        )
+
     builder.row(
         InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")
     )
-    
+
     return builder.as_markup()
 
 
@@ -582,6 +628,7 @@ __all__ = [
     'get_main_menu_keyboard',
     'get_warehouses_keyboard',
     'get_sku_keyboard',
+    'get_categories_keyboard',
     'get_confirmation_keyboard',
     'get_cancel_keyboard',
     'get_movement_type_keyboard',
