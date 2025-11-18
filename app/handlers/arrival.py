@@ -144,8 +144,7 @@ async def start_arrival(
         # Клавиатура выбора сырья
         keyboard = get_sku_keyboard(
             skus,
-            callback_prefix='arrival_sku',
-            show_stock=False
+            prefix='arrival_sku'
         )
 
         text = (

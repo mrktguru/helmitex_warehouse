@@ -151,7 +151,7 @@ async def start_packing(
 
         # Клавиатура выбора полуфабриката
         from app.utils.keyboards import get_sku_keyboard
-        keyboard = get_sku_keyboard(semi_skus, callback_prefix='pack_semi', show_stock=True)
+        keyboard = get_sku_keyboard(semi_skus, prefix='pack_semi')
 
         text = (
             "📦 <b>Фасовка готовой продукции</b>\n\n"
