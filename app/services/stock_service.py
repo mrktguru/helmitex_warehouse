@@ -421,7 +421,7 @@ async def receive_materials_async(
         session: Async сессия БД
         warehouse_id: ID склада
         sku_id: ID номенклатуры
-        quantity: Количество
+        quantity: Количество (float)
         user_id: ID пользователя
         price_per_unit: Цена за единицу
         supplier: Поставщик
@@ -435,7 +435,6 @@ async def receive_materials_async(
         ValueError: Если quantity <= 0
     """
     from app.database.models import Movement, MovementType
-    from decimal import Decimal
 
     if quantity <= 0:
         raise ValueError("Количество должно быть положительным")
@@ -453,12 +452,12 @@ async def receive_materials_async(
         stock = Stock(
             warehouse_id=warehouse_id,
             sku_id=sku_id,
-            quantity=Decimal(str(quantity))
+            quantity=float(quantity)
         )
         session.add(stock)
     else:
         # Обновляем существующий остаток
-        stock.quantity += Decimal(str(quantity))
+        stock.quantity += float(quantity)
         stock.updated_at = datetime.utcnow()
 
     # Создаем movement (приход)
@@ -466,8 +465,8 @@ async def receive_materials_async(
         warehouse_id=warehouse_id,
         sku_id=sku_id,
         type=MovementType.in_,
-        quantity=Decimal(str(quantity)),
-        price_per_unit=Decimal(str(price_per_unit)) if price_per_unit else None,
+        quantity=float(quantity),
+        price_per_unit=float(price_per_unit) if price_per_unit else None,
         user_id=user_id,
         supplier=supplier,
         document_number=document_number,
