@@ -17,6 +17,7 @@ from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import html
 
 from app.database.models import SKUType, User, ApprovalStatus, Category, SKU as SKUModel, Stock
 from app.services import warehouse_service, stock_service
@@ -171,7 +172,7 @@ async def start_arrival(
 
         # Сохранение данных в FSM
         await state.update_data(
-            user_id=user.id,
+            user_id=db_user.id,  # Database user ID, not telegram_id
             warehouse_id=warehouse.id,
             warehouse_name=warehouse.name,
             started_at=datetime.utcnow().isoformat()
@@ -199,8 +200,9 @@ async def start_arrival(
 
     except Exception as e:
         logger.error(f"Error in start_arrival: {e}", exc_info=True)
+        error_text = html.escape(str(e))
         await message.answer(
-            f"❌ Ошибка при загрузке данных: {str(e)}",
+            f"❌ Ошибка при загрузке данных:\n<code>{error_text}</code>",
             reply_markup=get_main_menu_keyboard()
         )
 
@@ -348,8 +350,9 @@ async def select_sku(
         
     except Exception as e:
         logger.error(f"Error in select_sku: {e}", exc_info=True)
+        error_text = html.escape(str(e))
         await callback.message.answer(
-            f"❌ Ошибка: {str(e)}",
+            f"❌ Ошибка:\n<code>{error_text}</code>",
             reply_markup=get_main_menu_keyboard()
         )
         await state.clear()
@@ -442,8 +445,9 @@ async def enter_quantity(
 
     except Exception as e:
         logger.error(f"Error in enter_quantity: {e}", exc_info=True)
+        error_text = html.escape(str(e))
         await message.answer(
-            f"❌ Произошла ошибка при обработке количества: {str(e)}\n\n"
+            f"❌ Произошла ошибка при обработке количества:\n<code>{error_text}</code>\n\n"
             "Попробуйте снова или используйте кнопку Отмена.",
             reply_markup=get_cancel_keyboard()
         )
@@ -705,13 +709,15 @@ async def confirm_arrival(
         
     except Exception as e:
         logger.error(f"Error in confirm_arrival: {e}", exc_info=True)
+        # Экранируем HTML спецсимволы в тексте ошибки
+        error_text = html.escape(str(e))
         await callback.message.edit_text(
             f"❌ <b>Ошибка при выполнении приемки:</b>\n\n"
-            f"{str(e)}\n\n"
+            f"<code>{error_text}</code>\n\n"
             "Приемка отменена.",
             reply_markup=get_main_menu_keyboard()
         )
-        
+
         await state.clear()
 
 
