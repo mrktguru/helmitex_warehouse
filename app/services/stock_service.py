@@ -409,9 +409,6 @@ async def receive_materials_async(
     sku_id: int,
     quantity: float,
     user_id: int,
-    price_per_unit: Optional[float] = None,
-    supplier: Optional[str] = None,
-    document_number: Optional[str] = None,
     notes: Optional[str] = None
 ) -> tuple[Stock, 'Movement']:
     """
@@ -423,9 +420,6 @@ async def receive_materials_async(
         sku_id: ID номенклатуры
         quantity: Количество (float)
         user_id: ID пользователя
-        price_per_unit: Цена за единицу
-        supplier: Поставщик
-        document_number: Номер документа
         notes: Примечания
 
     Returns:
@@ -466,10 +460,7 @@ async def receive_materials_async(
         sku_id=sku_id,
         type=MovementType.in_,
         quantity=float(quantity),
-        price_per_unit=float(price_per_unit) if price_per_unit else None,
         user_id=user_id,
-        supplier=supplier,
-        document_number=document_number,
         notes=notes or "Приёмка материалов"
     )
     session.add(movement)
@@ -480,8 +471,7 @@ async def receive_materials_async(
 
     logger.info(
         f"Приёмка: склад={warehouse_id}, SKU={sku_id}, "
-        f"количество={quantity}, пользователь={user_id}, "
-        f"поставщик={supplier}, документ={document_number}"
+        f"количество={quantity}, пользователь={user_id}"
     )
 
     return stock, movement
