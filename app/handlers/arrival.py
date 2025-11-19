@@ -676,15 +676,15 @@ async def confirm_arrival(
         price_per_unit = Decimal(data['price_per_unit']) if data.get('price_per_unit') else None
         
         # Выполнение приемки через сервис
-        stock, movement = await stock_service.receive_materials(
+        stock, movement = await stock_service.receive_materials_async(
             session=session,
             warehouse_id=data['warehouse_id'],
             sku_id=data['sku_id'],
             quantity=quantity,
+            user_id=data['user_id'],
             price_per_unit=price_per_unit,
             supplier=data.get('supplier'),
             document_number=data.get('document_number'),
-            received_by_id=data['user_id'],
             notes=data.get('notes')
         )
         
