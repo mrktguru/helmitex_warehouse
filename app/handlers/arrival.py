@@ -415,18 +415,30 @@ async def enter_quantity(
 
         unit_display = get_unit_display(sku_unit)
 
-        # Запрос цены
-        text = (
-            f"✅ Количество: <b>{quantity} {unit_display}</b>\n\n"
-            f"💰 Введите цену за {unit_display} (необязательно):\n\n"
-            "<i>Примеры: 1500, 2450.50</i>\n"
-            "<i>Или отправьте '-' для пропуска</i>"
+        # Переход сразу к подтверждению (необязательные поля закомментированы)
+        logger.info("Skipping optional fields, going to confirmation")
+
+        # Формирование сводки для подтверждения
+        data = await state.get_data()
+
+        summary = (
+            "📋 <b>Подтверждение приемки</b>\n\n"
+            f"📦 <b>Склад:</b> {data['warehouse_name']}\n"
+            f"📋 <b>Сырье:</b> {data['sku_name']}\n"
+            f"📊 <b>Количество:</b> {quantity} {unit_display}\n\n"
+            "❓ Подтвердить приемку?"
         )
 
-        logger.info("Sending price request message")
-        await message.answer(text, reply_markup=get_cancel_keyboard())
-        await state.set_state(ArrivalStates.enter_price)
-        logger.info("State set to enter_price")
+        await message.answer(
+            summary,
+            reply_markup=get_confirmation_keyboard(
+                confirm_callback='arrival_confirm',
+                cancel_callback='arrival_cancel'
+            )
+        )
+
+        await state.set_state(ArrivalStates.confirm_arrival)
+        logger.info("State set to confirm_arrival")
 
     except Exception as e:
         logger.error(f"Error in enter_quantity: {e}", exc_info=True)
@@ -438,215 +450,203 @@ async def enter_quantity(
 
 
 # ============================================================================
-# ВВОД ЦЕНЫ
+# НЕОБЯЗАТЕЛЬНЫЕ ПОЛЯ (ЗАКОММЕНТИРОВАНЫ ДЛЯ БУДУЩЕЙ РЕАЛИЗАЦИИ)
 # ============================================================================
 
-@arrival_router.message(StateFilter(ArrivalStates.enter_price), F.text)
-async def enter_price(
-    message: Message,
-    state: FSMContext
-) -> None:
-    """
-    Обрабатывает ввод цены.
-    """
-    user_input = message.text.strip()
-    
-    # Проверка на пропуск
-    if user_input == '-':
-        await state.update_data(price_per_unit=None)
-    else:
-        # Парсинг цены - возвращает (bool, float, str)
-        is_valid, price, error = parse_decimal_input(user_input)
-
-        if not is_valid:
-            await message.answer(
-                f"{error}\n\n"
-                "Примеры: <code>1500</code>, <code>2450.50</code>\n"
-                "Или отправьте <code>-</code> для пропуска\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
-
-        # Проверка неотрицательности
-        if price < 0:
-            await message.answer(
-                "❌ Цена не может быть отрицательной.\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
-
-        await state.update_data(price_per_unit=str(price))
-    
-    # Запрос поставщика
-    text = (
-        "🏢 Введите название поставщика (необязательно):\n\n"
-        "<i>Например: ООО \"Химпром\", ИП Иванов</i>\n"
-        "<i>Или отправьте '-' для пропуска</i>"
-    )
-    
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(ArrivalStates.enter_supplier)
-
-
-# ============================================================================
-# ВВОД ПОСТАВЩИКА
-# ============================================================================
-
-@arrival_router.message(StateFilter(ArrivalStates.enter_supplier), F.text)
-async def enter_supplier(
-    message: Message,
-    state: FSMContext
-) -> None:
-    """
-    Обрабатывает ввод поставщика.
-    """
-    user_input = message.text.strip()
-    
-    # Проверка на пропуск
-    if user_input == '-':
-        await state.update_data(supplier=None)
-    else:
-        # Валидация длины - возвращает (bool, str, str)
-        is_valid, validated_text, error = validate_text_length(user_input, max_length=200)
-
-        if not is_valid:
-            await message.answer(
-                f"{error}\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
-
-        await state.update_data(supplier=validated_text)
-    
-    # Запрос номера документа
-    text = (
-        "📄 Введите номер документа (необязательно):\n\n"
-        "<i>Например: ТТН-12345, Накладная №567</i>\n"
-        "<i>Или отправьте '-' для пропуска</i>"
-    )
-    
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(ArrivalStates.enter_document)
+# @arrival_router.message(StateFilter(ArrivalStates.enter_price), F.text)
+# async def enter_price(
+#     message: Message,
+#     state: FSMContext
+# ) -> None:
+#     """
+#     Обрабатывает ввод цены.
+#     """
+#     user_input = message.text.strip()
+#
+#     # Проверка на пропуск
+#     if user_input == '-':
+#         await state.update_data(price_per_unit=None)
+#     else:
+#         # Парсинг цены - возвращает (bool, float, str)
+#         is_valid, price, error = parse_decimal_input(user_input)
+#
+#         if not is_valid:
+#             await message.answer(
+#                 f"{error}\n\n"
+#                 "Примеры: <code>1500</code>, <code>2450.50</code>\n"
+#                 "Или отправьте <code>-</code> для пропуска\n\n"
+#                 "Попробуйте снова:",
+#                 reply_markup=get_cancel_keyboard()
+#             )
+#             return
+#
+#         # Проверка неотрицательности
+#         if price < 0:
+#             await message.answer(
+#                 "❌ Цена не может быть отрицательной.\n\n"
+#                 "Попробуйте снова:",
+#                 reply_markup=get_cancel_keyboard()
+#             )
+#             return
+#
+#         await state.update_data(price_per_unit=str(price))
+#
+#     # Запрос поставщика
+#     text = (
+#         "🏢 Введите название поставщика (необязательно):\n\n"
+#         "<i>Например: ООО \"Химпром\", ИП Иванов</i>\n"
+#         "<i>Или отправьте '-' для пропуска</i>"
+#     )
+#
+#     await message.answer(text, reply_markup=get_cancel_keyboard())
+#     await state.set_state(ArrivalStates.enter_supplier)
 
 
-# ============================================================================
-# ВВОД НОМЕРА ДОКУМЕНТА
-# ============================================================================
-
-@arrival_router.message(StateFilter(ArrivalStates.enter_document), F.text)
-async def enter_document(
-    message: Message,
-    state: FSMContext
-) -> None:
-    """
-    Обрабатывает ввод номера документа.
-    """
-    user_input = message.text.strip()
-    
-    # Проверка на пропуск
-    if user_input == '-':
-        await state.update_data(document_number=None)
-    else:
-        # Валидация длины - возвращает (bool, str, str)
-        is_valid, validated_text, error = validate_text_length(user_input, max_length=100)
-
-        if not is_valid:
-            await message.answer(
-                f"{error}\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
-
-        await state.update_data(document_number=validated_text)
-    
-    # Запрос примечаний
-    text = (
-        "📝 Введите примечания (необязательно):\n\n"
-        "<i>Любая дополнительная информация о приемке</i>\n"
-        "<i>Или отправьте '-' для пропуска</i>"
-    )
-    
-    await message.answer(text, reply_markup=get_cancel_keyboard())
-    await state.set_state(ArrivalStates.enter_notes)
+# @arrival_router.message(StateFilter(ArrivalStates.enter_supplier), F.text)
+# async def enter_supplier(
+#     message: Message,
+#     state: FSMContext
+# ) -> None:
+#     """
+#     Обрабатывает ввод поставщика.
+#     """
+#     user_input = message.text.strip()
+#
+#     # Проверка на пропуск
+#     if user_input == '-':
+#         await state.update_data(supplier=None)
+#     else:
+#         # Валидация длины - возвращает (bool, str, str)
+#         is_valid, validated_text, error = validate_text_length(user_input, max_length=200)
+#
+#         if not is_valid:
+#             await message.answer(
+#                 f"{error}\n\n"
+#                 "Попробуйте снова:",
+#                 reply_markup=get_cancel_keyboard()
+#             )
+#             return
+#
+#         await state.update_data(supplier=validated_text)
+#
+#     # Запрос номера документа
+#     text = (
+#         "📄 Введите номер документа (необязательно):\n\n"
+#         "<i>Например: ТТН-12345, Накладная №567</i>\n"
+#         "<i>Или отправьте '-' для пропуска</i>"
+#     )
+#
+#     await message.answer(text, reply_markup=get_cancel_keyboard())
+#     await state.set_state(ArrivalStates.enter_document)
 
 
-# ============================================================================
-# ВВОД ПРИМЕЧАНИЙ
-# ============================================================================
+# @arrival_router.message(StateFilter(ArrivalStates.enter_document), F.text)
+# async def enter_document(
+#     message: Message,
+#     state: FSMContext
+# ) -> None:
+#     """
+#     Обрабатывает ввод номера документа.
+#     """
+#     user_input = message.text.strip()
+#
+#     # Проверка на пропуск
+#     if user_input == '-':
+#         await state.update_data(document_number=None)
+#     else:
+#         # Валидация длины - возвращает (bool, str, str)
+#         is_valid, validated_text, error = validate_text_length(user_input, max_length=100)
+#
+#         if not is_valid:
+#             await message.answer(
+#                 f"{error}\n\n"
+#                 "Попробуйте снова:",
+#                 reply_markup=get_cancel_keyboard()
+#             )
+#             return
+#
+#         await state.update_data(document_number=validated_text)
+#
+#     # Запрос примечаний
+#     text = (
+#         "📝 Введите примечания (необязательно):\n\n"
+#         "<i>Любая дополнительная информация о приемке</i>\n"
+#         "<i>Или отправьте '-' для пропуска</i>"
+#     )
+#
+#     await message.answer(text, reply_markup=get_cancel_keyboard())
+#     await state.set_state(ArrivalStates.enter_notes)
 
-@arrival_router.message(StateFilter(ArrivalStates.enter_notes), F.text)
-async def enter_notes(
-    message: Message,
-    state: FSMContext
-) -> None:
-    """
-    Обрабатывает ввод примечаний и показывает подтверждение.
-    """
-    user_input = message.text.strip()
-    
-    # Проверка на пропуск
-    if user_input == '-':
-        await state.update_data(notes=None)
-    else:
-        # Валидация длины - возвращает (bool, str, str)
-        is_valid, validated_text, error = validate_text_length(user_input, max_length=500)
 
-        if not is_valid:
-            await message.answer(
-                f"{error}\n\n"
-                "Попробуйте снова:",
-                reply_markup=get_cancel_keyboard()
-            )
-            return
-
-        await state.update_data(notes=validated_text)
-    
-    # Получаем все данные для подтверждения
-    data = await state.get_data()
-
-    # Формирование сводки
-    quantity = Decimal(data['quantity'])
-    unit_display = get_unit_display(data['sku_unit'])
-
-    summary = (
-        "📋 <b>Подтверждение приемки</b>\n\n"
-        f"📦 <b>Склад:</b> {data['warehouse_name']}\n"
-        f"📋 <b>Сырье:</b> {data['sku_name']}\n"
-        f"📊 <b>Количество:</b> {quantity} {unit_display}\n"
-    )
-
-    if data.get('price_per_unit'):
-        price = Decimal(data['price_per_unit'])
-        total_cost = quantity * price
-        summary += (
-            f"💰 <b>Цена за {unit_display}:</b> {price} ₽\n"
-            f"💵 <b>Общая стоимость:</b> {total_cost} ₽\n"
-        )
-    
-    if data.get('supplier'):
-        summary += f"🏢 <b>Поставщик:</b> {data['supplier']}\n"
-    
-    if data.get('document_number'):
-        summary += f"📄 <b>Документ:</b> {data['document_number']}\n"
-    
-    if data.get('notes'):
-        summary += f"📝 <b>Примечания:</b> {data['notes']}\n"
-    
-    summary += "\n❓ Подтвердить приемку?"
-    
-    await message.answer(
-        summary,
-        reply_markup=get_confirmation_keyboard(
-            confirm_callback='arrival_confirm',
-            cancel_callback='arrival_cancel'
-        )
-    )
-    
-    await state.set_state(ArrivalStates.confirm_arrival)
+# @arrival_router.message(StateFilter(ArrivalStates.enter_notes), F.text)
+# async def enter_notes(
+#     message: Message,
+#     state: FSMContext
+# ) -> None:
+#     """
+#     Обрабатывает ввод примечаний и показывает подтверждение.
+#     """
+#     user_input = message.text.strip()
+#
+#     # Проверка на пропуск
+#     if user_input == '-':
+#         await state.update_data(notes=None)
+#     else:
+#         # Валидация длины - возвращает (bool, str, str)
+#         is_valid, validated_text, error = validate_text_length(user_input, max_length=500)
+#
+#         if not is_valid:
+#             await message.answer(
+#                 f"{error}\n\n"
+#                 "Попробуйте снова:",
+#                 reply_markup=get_cancel_keyboard()
+#             )
+#             return
+#
+#         await state.update_data(notes=validated_text)
+#
+#     # Получаем все данные для подтверждения
+#     data = await state.get_data()
+#
+#     # Формирование сводки
+#     quantity = Decimal(data['quantity'])
+#     unit_display = get_unit_display(data['sku_unit'])
+#
+#     summary = (
+#         "📋 <b>Подтверждение приемки</b>\n\n"
+#         f"📦 <b>Склад:</b> {data['warehouse_name']}\n"
+#         f"📋 <b>Сырье:</b> {data['sku_name']}\n"
+#         f"📊 <b>Количество:</b> {quantity} {unit_display}\n"
+#     )
+#
+#     if data.get('price_per_unit'):
+#         price = Decimal(data['price_per_unit'])
+#         total_cost = quantity * price
+#         summary += (
+#             f"💰 <b>Цена за {unit_display}:</b> {price} ₽\n"
+#             f"💵 <b>Общая стоимость:</b> {total_cost} ₽\n"
+#         )
+#
+#     if data.get('supplier'):
+#         summary += f"🏢 <b>Поставщик:</b> {data['supplier']}\n"
+#
+#     if data.get('document_number'):
+#         summary += f"📄 <b>Документ:</b> {data['document_number']}\n"
+#
+#     if data.get('notes'):
+#         summary += f"📝 <b>Примечания:</b> {data['notes']}\n"
+#
+#     summary += "\n❓ Подтвердить приемку?"
+#
+#     await message.answer(
+#         summary,
+#         reply_markup=get_confirmation_keyboard(
+#             confirm_callback='arrival_confirm',
+#             cancel_callback='arrival_cancel'
+#         )
+#     )
+#
+#     await state.set_state(ArrivalStates.confirm_arrival)
 
 
 # ============================================================================
@@ -673,19 +673,18 @@ async def confirm_arrival(
     try:
         # Конвертируем строки обратно в Decimal
         quantity = Decimal(data['quantity'])
-        price_per_unit = Decimal(data['price_per_unit']) if data.get('price_per_unit') else None
-        
-        # Выполнение приемки через сервис
+
+        # Выполнение приемки через сервис (без необязательных полей)
         stock, movement = await stock_service.receive_materials_async(
             session=session,
             warehouse_id=data['warehouse_id'],
             sku_id=data['sku_id'],
             quantity=quantity,
             user_id=data['user_id'],
-            price_per_unit=price_per_unit,
-            supplier=data.get('supplier'),
-            document_number=data.get('document_number'),
-            notes=data.get('notes')
+            price_per_unit=None,  # Закомментировано для будущей реализации
+            supplier=None,  # Закомментировано для будущей реализации
+            document_number=None,  # Закомментировано для будущей реализации
+            notes="Приемка сырья"
         )
         
         # Успешное завершение

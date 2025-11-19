@@ -465,7 +465,7 @@ async def receive_materials_async(
     movement = Movement(
         warehouse_id=warehouse_id,
         sku_id=sku_id,
-        type=MovementType.receipt,
+        type=MovementType.in_,
         quantity=Decimal(str(quantity)),
         price_per_unit=Decimal(str(price_per_unit)) if price_per_unit else None,
         user_id=user_id,
