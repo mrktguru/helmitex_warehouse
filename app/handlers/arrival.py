@@ -681,9 +681,6 @@ async def confirm_arrival(
             sku_id=data['sku_id'],
             quantity=quantity,
             user_id=data['user_id'],
-            price_per_unit=None,  # Закомментировано для будущей реализации
-            supplier=None,  # Закомментировано для будущей реализации
-            document_number=None,  # Закомментировано для будущей реализации
             notes="Приемка сырья"
         )
         
